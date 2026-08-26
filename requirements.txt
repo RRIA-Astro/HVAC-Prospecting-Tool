@@ -1,2 +1,2 @@
-openai>=1.0
+openai>=2.0
 pyinstaller>=6.0
