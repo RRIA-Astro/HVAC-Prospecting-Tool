@@ -1,14 +1,19 @@
-v0.6.3 MULTI-CROP TEST
+HVAC Deep Vision v0.6.4
 
-Creates 9 overlapping high-resolution crops plus the overview. GPT-5.4 mini inspects each view independently, including building perimeter/ground areas, then an 11th call synthesizes the observations.
+Fixes the max_output_tokens failure seen in v0.6.3.
 
-Uses quantity bands instead of exact equipment counts and 'not observed' instead of claiming absence.
+Changes:
+- Individual crop inspections now use LOW reasoning effort.
+- Initial crop output allowance increased from 2,200 to 5,000 tokens.
+- If a crop still hits max_output_tokens, it automatically retries once with 8,000 tokens.
+- Final multi-view synthesis retains MEDIUM reasoning with a 6,000-token allowance.
+- Multi-crop geometry, blind inspection rubric, quantity bands, and per-view reporting remain unchanged.
 
-This intentionally costs more per property; it is an accuracy experiment.
+This is intentionally still an accuracy experiment using 10 visual inspections plus one synthesis call.
 
-First tests:
-- 912 S Birdneck: can it find the ground-mounted 300-ton air-cooled chiller?
-- 717 General Booth: can it find the cooling towers and piping?
-- 1632 Corporate Landing: does it avoid gross overcounting?
+TEST FIRST:
+912 S Birdneck — determine whether any crop detects the ground-mounted 300-ton air-cooled chiller.
 
-GitHub: replace app.py, requirements.txt, and .github/workflows/build-windows.yml, commit, then download HVAC-Deep-Vision-v063-Windows.
+GitHub:
+Replace app.py, requirements.txt, and .github/workflows/build-windows.yml, then commit.
+Download the HVAC-Deep-Vision-v064-Windows artifact.
