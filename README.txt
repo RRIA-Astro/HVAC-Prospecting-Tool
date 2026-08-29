@@ -1,23 +1,26 @@
-HVAC Deep Vision v0.6.5 — HVAC Forensic Discrimination
+HVAC Deep Vision v0.6.6 — Connection Tracing
 
-Adds domain rules learned from the benchmark:
+Built directly from the supplied v0.6.5 app.py.
 
-- A large multi-fan box is NOT enough to call something a chiller.
-- Suspected chillers must be checked for substantial hydronic/process-water connections.
-- Valves, flanges, paired larger pipes, insulation, headers, fittings and similar connections strengthen chiller evidence.
-- Visible PVC condensate drainage is POSITIVE evidence for direct-expansion packaged HVAC and AGAINST classifying that unit as an air-cooled water chiller.
-- PVC condensate drains MUST NOT create central-plant evidence.
-- Generic conduit, drains, rails, seams, shadows and roof lines must not be treated as hydronic piping.
-- Strong piping triggers a trace-the-pipe / reconsider-connected-equipment pass.
-- Cooling-tower search now includes screened, low-profile, closed-circuit, evaporative and process heat-rejection equipment.
-- Mechanical complexity alone no longer establishes a central plant.
-- Large-tonnage packaged RTUs can still be worthwhile prospects.
+MAIN CHANGE
+Hydronic/process-water identification is now based on a weighted evidence hierarchy rather than requiring visible valves/flanges.
 
-v0.6.4 multi-crop geometry and robust token/retry handling are retained.
+Strong evidence:
+- substantial pipe diameter
+- paired supply/return-style runs
+- multiple 90-degree turns / complex purposeful routing
+- direct equipment-to-building or penthouse termination
+- insulation
+- valves/flanges/headers/pumps/fittings when visible
 
-REGRESSION TESTS:
-1. 1632 Corporate Landing: should favor large packaged DX RTUs, with no central plant based merely on PVC drains/roof lines.
-2. 912 S Birdneck: should retain probable air-cooled chiller when substantial water connections are visible.
-3. 717 General Booth: should use strong piping to reconsider atypical process chillers and cooling towers.
+Valves/flanges are supporting evidence, not mandatory; they may be indoors.
+White piping is not automatically PVC.
+Small, simple PVC condensate drainage remains positive DX evidence.
+Credible complex piping triggers trace-both-directions reasoning and reconsideration of connected equipment.
 
-GitHub: replace app.py, requirements.txt and .github/workflows/build-windows.yml, commit, then download HVAC-Deep-Vision-v065-Windows.
+Cooling-tower logic also uses piping relationships for screened, low-profile, closed-circuit, evaporative, and process heat-rejection equipment.
+
+Regression tests:
+1. 1632 Corporate Landing — should remain packaged DX / no invented central plant.
+2. 912 S Birdneck — should recover the air-cooled chiller from pipe size, geometry, and building termination.
+3. 717 General Booth — should use piping relationships to reconsider the process chillers and cooling towers.
