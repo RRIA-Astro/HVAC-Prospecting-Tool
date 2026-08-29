@@ -1,15 +1,18 @@
-v0.7.2 HIGH-RECALL DISCOVERY
+HVAC Territory Discovery v0.7.3 — Parcel Spatial Join
 
-Changes:
-- Property-first discovery using Virginia Beach parcel data plus Microsoft/VGIN building footprints.
-- Paginates ArcGIS queries instead of assuming a single response is complete.
-- A parcel can remain a candidate even when the footprint source has no qualifying match.
-- Such rows display SQFT=UNKNOWN and SOURCE=PARCEL ONLY.
-- Prospects are deduplicated by GPIN, with normalized address fallback.
-- Public/Semi Public and Military are promoted to HIGH rather than UNKNOWN.
-- Strict requested radius remains.
-- Deep Vision is still not invoked.
+Core fix:
+Building footprints are no longer matched to nearby parcel reference points. Each building centroid must geometrically fall inside the actual Virginia Beach Property_Polygons parcel polygon.
 
-Regression targets:
-927 S Birdneck Rd and 1096 S Birdneck Rd should now have a path into discovery even if Microsoft's footprint layer omitted them.
-928 Birdneck should not appear twice merely because multiple footprint geometries map to the same parcel.
+Per property the app reports:
+- largest building footprint
+- total building footprint
+- building count
+- parcel land use/zoning
+- prospect tier/score
+- SPATIAL JOIN or FOOTPRINT MISSING
+
+One prospect row is retained per GPIN. Multi-building campuses therefore remain one sales property while retaining their building counts/areas.
+
+Regression:
+- 928 Birdneck should no longer inherit neighboring building areas or appear as duplicate property rows.
+- 927 and 1096 Birdneck can remain through FOOTPRINT MISSING if the external footprint dataset lacks their structures.
