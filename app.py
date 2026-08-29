@@ -1,135 +1,187 @@
-import base64,json,threading,tkinter as tk
-from tkinter import ttk,filedialog,messagebox
+import base64, json, math, threading, tkinter as tk, urllib.parse, urllib.request
+from tkinter import ttk, messagebox
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageTk
 from openai import OpenAI
+
 MODEL="gpt-5.4-mini"
-OBS={"type":"object","additionalProperties":False,"properties":{k:{"type":"object","additionalProperties":False,"properties":{"status":{"type":"string","enum":["strong","probable","possible","not_observed"]},"quantity":{"type":"string","enum":["none","one","few","several","many","unknown"]},"confidence":{"type":"integer"},"evidence":{"type":"string"}},"required":["status","quantity","confidence","evidence"]} for k in ["cooling_towers","air_cooled_chillers","large_packaged_hvac","small_packaged_hvac","condensers","piping","mechanical_yard"]},"required":["cooling_towers","air_cooled_chillers","large_packaged_hvac","small_packaged_hvac","condensers","piping","mechanical_yard"]}
-FINAL={"type":"object","additionalProperties":False,"properties":{"class":{"type":"string","enum":["GOOD","MAYBE","POOR"]},"score":{"type":"integer"},"confidence":{"type":"integer"},"cooling_towers":{"type":"string"},"air_cooled_chillers":{"type":"string"},"large_packaged_hvac":{"type":"string"},"small_packaged_hvac":{"type":"string"},"piping":{"type":"string"},"central_system_evidence":{"type":"string"},"ambiguities":{"type":"array","items":{"type":"string"}},"summary":{"type":"string"}},"required":["class","score","confidence","cooling_towers","air_cooled_chillers","large_packaged_hvac","small_packaged_hvac","piping","central_system_evidence","ambiguities","summary"]}
-IP="""BLIND COMMERCIAL HVAC FORENSIC AERIAL INSPECTION. Inspect ALL visible roof AND ground/perimeter areas.
 
-Identify candidate equipment AND trace visible piping to discriminate equipment types.
+# Virginia Beach public GIS services
+ADDR_LAYER="https://geo.vbgov.com/mapservices/rest/services/Business_Systems/Pictometry_Online/MapServer/0/query"
+PROP_LAYER="https://geo.vbgov.com/mapservices/rest/services/Business_Systems/Pictometry_Online/MapServer/4/query"
+AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/ImageServer/exportImage"
+VGIN_BUILDINGS="https://dsfmportal.dcr.virginia.gov/server/rest/services/CivilReference/Civil_Reference_Layers/MapServer/2/query"
 
-HYDRONIC / PROCESS-WATER PIPING uses WEIGHTED evidence. Valves/flanges are NOT required. Strong clues include:
-- substantial diameter relative to condensate/drain piping;
-- paired supply/return-style runs;
-- multiple 90-degree turns or complex purposeful routing;
-- elevation changes/supports;
-- direct equipment-to-building or equipment-to-penthouse termination;
-- insulation;
-- valves, flanges, headers, strainers, gauges, pumps and fittings WHEN visible.
-White pipe is not automatically PVC. Large insulated white piping can be hydronic/process-water piping.
+def get_json(url, params):
+    q=urllib.parse.urlencode(params)
+    req=urllib.request.Request(url+"?"+q,headers={"User-Agent":"HVAC-Territory-Discovery/0.7"})
+    with urllib.request.urlopen(req,timeout=60) as r:
+        return json.loads(r.read().decode("utf-8"))
 
-CONDENSATE / DX:
-- A small PVC condensate drain is POSITIVE evidence for direct-expansion packaged HVAC and AGAINST interpreting that unit as an air-cooled water chiller.
-- Condensate drainage is generally small and comparatively simple/gravity-routed.
-- Do not confuse a drain with a substantial paired circuit having multiple turns and purposeful routing.
+def geocode_address(text):
+    # VB GIS address point search; deliberately VB-only for first territory-discovery build.
+    # Query common text fields without assuming a single exact schema.
+    meta=get_json(ADDR_LAYER.rsplit("/query",1)[0],{"f":"json"})
+    fields=[f["name"] for f in meta.get("fields",[]) if f.get("type")=="esriFieldTypeString"]
+    preferred=[x for x in fields if any(k in x.lower() for k in ("address","full","street","site"))]
+    use=(preferred or fields)[:8]
+    safe=text.replace("'","''")
+    where=" OR ".join([f"UPPER({f}) LIKE UPPER('%{safe}%')" for f in use]) if use else "1=0"
+    d=get_json(ADDR_LAYER,{"f":"json","where":where,"outFields":"*","returnGeometry":"true","outSR":"4326","resultRecordCount":10})
+    feats=d.get("features",[])
+    if not feats: raise RuntimeError("Virginia Beach GIS could not find that address/place. Try a street address for v0.7.0.")
+    g=feats[0]["geometry"]
+    return float(g["x"]),float(g["y"]),feats[0].get("attributes",{})
 
-CONNECTION TRACING:
-- Whenever credible substantial or complex piping is visible, trace it in BOTH directions as far as the view permits.
-- Determine whether it appears equipment-to-building, equipment-to-penthouse, equipment-to-equipment, or unresolved.
-- If piping reaches an ambiguous fan-topped object, RECONSIDER that object's identity using the connection.
-- Strong equipment-to-building paired water piping can support a chiller/process-cooling interpretation even when valves/flanges are indoors or obscured.
+def bbox_for_radius(lon,lat,miles):
+    dy=miles/69.0
+    dx=miles/(69.0*max(.2,math.cos(math.radians(lat))))
+    return lon-dx,lat-dy,lon+dx,lat+dy
 
-AIR-COOLED / PROCESS CHILLERS:
-- Morphology alone is insufficient.
-- Large multi-fan equipment connected to a substantial paired/routed water circuit can be a chiller even without externally visible specialties.
-- Process chillers may look different from typical comfort-cooling chillers; connection evidence may be more diagnostic than cabinet shape.
+def polygon_area_sqft(rings):
+    # Local equirectangular approximation; adequate for discovery/ranking.
+    pts=[]
+    for ring in rings or []:
+        if not ring: continue
+        lat0=sum(p[1] for p in ring)/len(ring)
+        c=math.cos(math.radians(lat0))
+        xy=[(p[0]*69.172*c*5280,p[1]*69.0*5280) for p in ring]
+        a=abs(sum(xy[i][0]*xy[(i+1)%len(xy)][1]-xy[(i+1)%len(xy)][0]*xy[i][1] for i in range(len(xy)))/2)
+        pts.append(a)
+    return max(pts) if pts else 0
 
-PACKAGED RTU / AHU:
-- Favor packaged DX when cabinet/curb/duct morphology is present, especially with a small condensate drain and no substantial water circuit.
-- Do not classify prominent exhaust, make-up-air, kitchen-hood, or ventilation equipment as a large RTU solely because it is physically large.
+def centroid(rings):
+    pts=[p for ring in (rings or []) for p in ring]
+    if not pts:return None,None
+    return sum(p[0] for p in pts)/len(pts),sum(p[1] for p in pts)/len(pts)
 
-COOLING TOWERS / HEAT REJECTION:
-- Search for conventional towers AND screened, partly enclosed, low-profile, closed-circuit, evaporative, induced-draft, and process heat-rejection equipment.
-- Do not require a visible plume.
-- Atypical fan-array/tower morphology PLUS substantial condenser/process-water piping is meaningful combined evidence.
-- If credible large water piping terminates at a tower-like/fan-array object, raise heat-rejection probability even if the form factor is unfamiliar.
+def discover(center,radius,min_sqft,max_results=400):
+    lon,lat=center
+    xmin,ymin,xmax,ymax=bbox_for_radius(lon,lat,radius)
+    geom=f"{xmin},{ymin},{xmax},{ymax}"
+    params={"f":"json","where":"1=1","geometry":geom,"geometryType":"esriGeometryEnvelope",
+            "inSR":"4326","spatialRel":"esriSpatialRelIntersects","outFields":"*",
+            "returnGeometry":"true","outSR":"4326","resultRecordCount":max_results}
+    d=get_json(VGIN_BUILDINGS,params)
+    rows=[]
+    for ft in d.get("features",[]):
+        rings=ft.get("geometry",{}).get("rings",[])
+        area=polygon_area_sqft(rings)
+        if area<min_sqft: continue
+        x,y=centroid(rings)
+        if x is None: continue
+        dist=math.hypot((x-lon)*69.172*math.cos(math.radians(lat)),(y-lat)*69.0)
+        if dist>radius*1.08: continue
+        rows.append({"lon":x,"lat":y,"sqft":round(area),"distance":round(dist,2),
+                     "oid":ft.get("attributes",{}).get("OBJECTID","")})
+    rows.sort(key=lambda z:(-z["sqft"],z["distance"]))
+    return rows
 
-CENTRAL SYSTEM CAUTION:
-- Mechanical complexity alone does NOT establish a central plant.
-- Generic conduit, roof drains, seams, rails, shadows, gas piping, or isolated lines do NOT establish hydronic piping.
-- Conversely, do not reject a central system merely because valves/flanges are not visible when pipe size, pairing, routing geometry, and termination strongly support a pumped water circuit.
+def nearest_address(lon,lat):
+    # nearest address point within ~300 ft
+    d=get_json(ADDR_LAYER,{"f":"json","where":"1=1","geometry":f"{lon},{lat}",
+        "geometryType":"esriGeometryPoint","inSR":"4326","spatialRel":"esriSpatialRelIntersects",
+        "distance":"300","units":"esriSRUnit_Foot","outFields":"*","returnGeometry":"true",
+        "outSR":"4326","resultRecordCount":8})
+    feats=d.get("features",[])
+    if not feats:return ""
+    def label(a):
+        for k,v in a.items():
+            if v and any(t in k.lower() for t in ("address","full","site")): return str(v)
+        vals=[str(v) for v in a.values() if v not in (None,"")]
+        return " ".join(vals[:4])
+    return label(feats[0].get("attributes",{}))
 
-Do not infer address, occupant, company, or building type. Use not_observed rather than claiming absence from one crop. Use quantity bands, not exact counts. Preserve plausible high-value equipment for synthesis."""
-SP="""Synthesize the independent overlapping observations from ONE property and deduplicate them. Use HVAC forensic CONNECTION EVIDENCE.
+def export_aerial(lon,lat,sqft,outfile):
+    # Scale frame to footprint size, but keep enough perimeter to expose ground equipment.
+    side=max(550,min(1800,math.sqrt(max(sqft,1))*3.2))
+    half_m=(side*.3048)/2
+    # Web Mercator
+    R=6378137.0
+    x=R*math.radians(lon)
+    y=R*math.log(math.tan(math.pi/4+math.radians(lat)/2))
+    bbox=f"{x-half_m},{y-half_m},{x+half_m},{y+half_m}"
+    q=urllib.parse.urlencode({"f":"image","bbox":bbox,"bboxSR":"3857","imageSR":"3857",
+                              "size":"1800,1800","format":"jpg","pixelType":"U8",
+                              "interpolation":"+RSP_BilinearInterpolation"})
+    req=urllib.request.Request(AERIAL+"?"+q,headers={"User-Agent":"HVAC-Territory-Discovery/0.7"})
+    with urllib.request.urlopen(req,timeout=120) as r: Path(outfile).write_bytes(r.read())
 
-WEIGHTED PIPING RULE:
-Do NOT require visible valves/flanges for hydronic/process-water piping. Strong evidence can arise from substantial diameter + paired runs + multiple 90-degree turns/complex routing + direct equipment-to-building/penthouse termination. Insulation, valves, flanges, headers, pumps and fittings strengthen the conclusion but are not mandatory. White pipe is not automatically PVC.
+class App:
+    def __init__(self,r):
+        self.r=r; self.rows=[]; self.center=None
+        r.title("HVAC Territory Discovery v0.7.0 — Candidate Finder"); r.geometry("1180x780")
+        top=ttk.Frame(r,padding=10);top.pack(fill="x")
+        ttk.Label(top,text="Virginia Beach address / search center:").grid(row=0,column=0,sticky="w")
+        self.q=tk.StringVar(value="717 General Booth Blvd")
+        ttk.Entry(top,textvariable=self.q,width=44).grid(row=0,column=1,padx=5)
+        ttk.Label(top,text="Radius (mi):").grid(row=0,column=2)
+        self.rad=tk.StringVar(value="1.0");ttk.Entry(top,textvariable=self.rad,width=7).grid(row=0,column=3,padx=5)
+        ttk.Label(top,text="Min footprint ft²:").grid(row=0,column=4)
+        self.mins=tk.StringVar(value="10000");ttk.Entry(top,textvariable=self.mins,width=9).grid(row=0,column=5,padx=5)
+        self.go=ttk.Button(top,text="Discover Candidates",command=self.start);self.go.grid(row=0,column=6,padx=8)
+        self.status=tk.StringVar(value="Ready — v0.7.0 discovers and ranks building candidates; deep vision remains a separate validated engine.")
+        ttk.Label(r,textvariable=self.status).pack(fill="x",padx=10)
+        cols=("rank","address","sqft","miles","status")
+        self.tree=ttk.Treeview(r,columns=cols,show="headings")
+        for c,w in zip(cols,(55,430,120,90,280)):
+            self.tree.heading(c,text=c.upper());self.tree.column(c,width=w,anchor="w")
+        self.tree.pack(fill="both",expand=True,padx=10,pady=8)
+        bar=ttk.Frame(r,padding=(10,0,10,10));bar.pack(fill="x")
+        ttk.Button(bar,text="Download Aerial for Selected",command=self.aerial).pack(side="left")
+        ttk.Button(bar,text="Copy Selected Address",command=self.copy_addr).pack(side="left",padx=8)
+        ttk.Label(bar,text="v0.7.0 deliberately does not auto-run 11-call deep vision on every building.").pack(side="right")
 
-DX RULE:
-Small simple PVC condensate drainage is positive DX evidence and MUST NOT create central-plant evidence. Large paired complex routed piping is fundamentally different.
+    def start(self):
+        self.go.config(state="disabled"); self.status.set("Finding search center and querying building footprints...")
+        threading.Thread(target=self.work,daemon=True).start()
 
-TRACE BEFORE CLASSIFYING:
-- If any crop reports credible substantial or complex piping, use the reported endpoints and geometry to reconsider connected equipment.
-- Large fan-topped equipment connected by a substantial paired routed circuit to a building/penthouse may be an air-cooled or process chiller despite atypical morphology.
-- Tower-like/fan-array equipment connected to substantial condenser/process-water piping may be cooling-tower/heat-rejection equipment even if screened, low-profile, enclosed, or nonstandard.
-- If strong piping evidence exists but equipment identity remains uncertain, preserve the property as a high-value prospect rather than automatically collapsing it to packaged DX.
+    def work(self):
+        try:
+            lon,lat,_=geocode_address(self.q.get().strip())
+            radius=float(self.rad.get()); mins=float(self.mins.get())
+            rows=discover((lon,lat),radius,mins)
+            # Address only the top 100 candidates to avoid hammering the public service.
+            for i,z in enumerate(rows[:100]):
+                self.r.after(0,lambda i=i,n=len(rows[:100]):self.status.set(f"Resolving candidate addresses {i+1}/{n}..."))
+                try:z["address"]=nearest_address(z["lon"],z["lat"])
+                except:z["address"]=""
+                z["status"]="UNCLASSIFIED — ready for property/business filter"
+            self.rows=rows[:100];self.center=(lon,lat)
+            self.r.after(0,self.show)
+        except Exception as e:self.r.after(0,lambda e=e:self.fail(e))
 
-PACKAGED DX CHECK:
-Favor packaged RTU/AHU when cabinet/curb/duct evidence exists AND no substantial water circuit connects to the unit. A small condensate drain supports DX. Mechanical complexity alone does NOT establish a central plant.
+    def show(self):
+        for x in self.tree.get_children():self.tree.delete(x)
+        for i,z in enumerate(self.rows,1):
+            self.tree.insert("", "end", iid=str(i-1), values=(i,z.get("address",""),f'{z["sqft"]:,}',z["distance"],z["status"]))
+        self.status.set(f"{len(self.rows)} candidate buildings shown. Largest footprints ranked first. Select one to download centered 2025 aerial imagery.")
+        self.go.config(state="normal")
 
-SCORING:
-- Confirmed/probable chiller, cooling tower, or strong traceable pumped central/process-water circuit should materially raise prospect score.
-- A credible unresolved large chiller/tower candidate with strong connection evidence should generally keep the property GOOD or upper-MAYBE for human review.
-- Genuinely large packaged RTUs can be worthwhile.
-- Numerous small packaged units alone are weak.
-- Not_observed is not proof of absence.
+    def fail(self,e):
+        self.status.set("Failed: "+repr(e));self.go.config(state="normal")
 
-In central_system_evidence and summary, explicitly explain the evidence chain, for example: substantial paired piping + multiple routed turns + equipment-to-building termination -> probable pumped hydronic/process-water circuit. Do not infer property identity or building type."""
-def url(p):
- m="image/png" if str(p).lower().endswith(".png") else "image/jpeg";return f"data:{m};base64,"+base64.b64encode(Path(p).read_bytes()).decode()
-def ask(c,prompt,content,schema,name,tok=5000,effort="low"):
- last=None
- for attempt in range(2):
-  budget=tok if attempt==0 else max(tok,8000)
-  r=c.responses.create(model=MODEL,reasoning={"effort":effort},input=[{"role":"user","content":[{"type":"input_text","text":prompt}]+content}],text={"format":{"type":"json_schema","name":name,"strict":True,"schema":schema},"verbosity":"low"},max_output_tokens=budget)
-  last=r
-  if r.status=="completed" and (r.output_text or "").strip():
-   return json.loads(r.output_text),r
-  reason=getattr(getattr(r,"incomplete_details",None),"reason",None)
-  if attempt==0 and reason=="max_output_tokens":
-   continue
-  raise RuntimeError(f"response {r.status}: {getattr(r,'incomplete_details',None)}")
- raise RuntimeError(f"No usable response: {getattr(last,'status',None)}")
-def crops(path):
- im=Image.open(path).convert("RGB");w,h=im.size;d=Path(path).with_name(Path(path).stem+"_crops");d.mkdir(exist_ok=True);out=[("overview",path)]
- tw,th=int(w*.5),int(h*.5);n=0
- for cy in (.25,.5,.75):
-  for cx in (.25,.5,.75):
-   x=max(0,min(w-tw,int(w*cx-tw/2)));y=max(0,min(h-th,int(h*cy-th/2)));n+=1;p=d/f"crop_{n}.jpg";im.crop((x,y,x+tw,y+th)).save(p,quality=96);out.append((f"crop {n}",str(p)))
- return out
-def run(key,path,progress):
- c=OpenAI(api_key=key,timeout=180);views=crops(path);allobs=[];use=[0,0]
- for i,(label,p) in enumerate(views):
-  progress(f"Inspecting {label}: {i+1}/10");x,r=ask(c,IP,[{"type":"input_image","image_url":url(p),"detail":"high"}],OBS,"crop_inspection");allobs.append({"view":label,"observations":x})
-  try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
-  except:pass
- progress("Synthesizing all views...");x,r=ask(c,SP,[{"type":"input_text","text":json.dumps(allobs,separators=(",",":"))}],FINAL,"property_synthesis",6000,"medium")
- try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
- except:pass
- return x,allobs,use
-class A:
- def __init__(self,r):
-  self.r=r;r.title("HVAC Deep Vision v0.6.6 — Connection Tracing");r.geometry("980x840");f=ttk.Frame(r,padding=10);f.pack(fill="x");ttk.Label(f,text="API key:").pack(side="left");self.k=tk.StringVar();ttk.Entry(f,textvariable=self.k,show="*",width=38).pack(side="left",padx=5);ttk.Button(f,text="Choose Image",command=self.choose).pack(side="left");self.b=ttk.Button(f,text="Run 10-View Inspection",command=self.start,state="disabled");self.b.pack(side="left",padx=5);self.p=tk.StringVar(value="No image selected");ttk.Label(r,textvariable=self.p).pack(fill="x",padx=10);self.s=tk.StringVar(value="Ready");ttk.Label(r,textvariable=self.s).pack(fill="x",padx=10,pady=8);self.o=tk.Text(r,wrap="word");self.o.pack(fill="both",expand=True,padx=10,pady=10)
- def choose(self):
-  p=filedialog.askopenfilename(filetypes=[("Images","*.jpg *.jpeg *.png")])
-  if p:self.p.set(p);self.b.config(state="normal")
- def prog(self,x):self.r.after(0,lambda:self.s.set(x))
- def start(self):
-  if not self.k.get().strip():messagebox.showinfo("API key","Enter your API key.");return
-  self.b.config(state="disabled");threading.Thread(target=self.work,daemon=True).start()
- def work(self):
-  try:x,o,u=run(self.k.get().strip(),self.p.get(),self.prog);self.r.after(0,lambda:self.show(x,o,u))
-  except Exception as e:self.r.after(0,lambda e=e:self.fail(e))
-  finally:self.r.after(0,lambda:self.b.config(state="normal"))
- def fail(self,e):self.o.delete("1.0","end");self.o.insert("end",repr(e));self.s.set("Failed")
- def show(self,x,o,u):
-  self.o.delete("1.0","end");self.o.insert("end",f"VISUAL PROSPECT: {x['class']}\nSCORE: {x['score']}/100\nCONFIDENCE: {x['confidence']}%\n\n")
-  for k in ["cooling_towers","air_cooled_chillers","large_packaged_hvac","small_packaged_hvac","piping","central_system_evidence"]:self.o.insert("end",k.replace("_"," ").upper()+"\n"+x[k]+"\n\n")
-  self.o.insert("end","AMBIGUITIES\n"+"".join("• "+a+"\n" for a in x["ambiguities"])+"\nSUMMARY\n"+x["summary"]+f"\n\nTOKENS ACROSS 11 CALLS: {sum(u):,} ({u[0]:,} in / {u[1]:,} out)\n\nPER-VIEW POSITIVE DETECTIONS\n")
-  for z in o:
-   hits=[f"{k}={v['status']} {v['confidence']}%" for k,v in z["observations"].items() if v["status"]!="not_observed"]
-   self.o.insert("end",z["view"]+": "+("; ".join(hits) if hits else "none")+"\n")
-  self.s.set("10-view connection-tracing inspection complete (v0.6.6)")
-r=tk.Tk();A(r);r.mainloop()
+    def selected(self):
+        s=self.tree.selection()
+        if not s: messagebox.showinfo("Select candidate","Select a building first.");return None
+        return self.rows[int(s[0])]
+
+    def aerial(self):
+        z=self.selected()
+        if not z:return
+        out=Path.home()/"Downloads"/f'HVAC_candidate_{z["lat"]:.5f}_{z["lon"]:.5f}.jpg'
+        self.status.set("Downloading centered 2025 Virginia Beach aerial...")
+        def w():
+            try:
+                export_aerial(z["lon"],z["lat"],z["sqft"],out)
+                self.r.after(0,lambda:self.status.set("Saved: "+str(out)))
+            except Exception as e:self.r.after(0,lambda:self.status.set("Aerial download failed: "+repr(e)))
+        threading.Thread(target=w,daemon=True).start()
+
+    def copy_addr(self):
+        z=self.selected()
+        if not z:return
+        self.r.clipboard_clear();self.r.clipboard_append(z.get("address",""))
+        self.status.set("Address copied.")
+
+r=tk.Tk();App(r);r.mainloop()
