@@ -12,8 +12,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip && pip install -r requirements.txt
-      - run: pyinstaller --noconfirm --clean --onefile --windowed --name HVAC_Deep_Vision_v065 --collect-all openai --collect-all PIL app.py
+      - run: pyinstaller --noconfirm --clean --onefile --windowed --name HVAC_Deep_Vision_v066 --collect-all openai --collect-all PIL app.py
       - uses: actions/upload-artifact@v4
         with:
-          name: HVAC-Deep-Vision-v065-Windows
-          path: dist/HVAC_Deep_Vision_v065.exe
+          name: HVAC-Deep-Vision-v066-Windows
+          path: dist/HVAC_Deep_Vision_v066.exe
