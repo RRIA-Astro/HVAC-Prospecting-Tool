@@ -1,15 +1,31 @@
-HVAC Territory Discovery v0.7.6
+HVAC Territory Discovery v0.8.0
 
-Resilience update:
-- Tries City of Virginia Beach Building Footprints first.
-- If the city service is stopped/errors/returns zero, automatically falls back to Virginia CivilReference Building_Footprints.
-- The fallback is the source used successfully in v0.7.3 and is currently published by Virginia DCR/VGIN.
-- A footprint-source outage no longer aborts the entire search.
-- Status line reports active footprint source, footprint count, spatial joins, and fallback reason.
-- Parcel/address/land-use data remains Virginia Beach Pictometry Property_Polygons.
-- SIZE / ANOMALY paths and many-small-building penalty retained.
-- No OpenAI calls.
+MAJOR MILESTONE: Cheap Mechanical Vision Screen
 
-Regression:
-717 General Booth Blvd / 1.0 mi / 10,000 ft2.
-Expected during current city-service outage: source VA CIVILREF, with nonzero footprints and joins.
+Adds:
+- One-image, one-call GPT-5.4-mini first-pass aerial screening.
+- Low reasoning and 700 max output tokens to keep screening much cheaper than v0.6.6 Deep Vision.
+- Screen Selected button for controlled regression testing.
+- Screen Top 25 button; intentionally capped at 25 per click to control API spend.
+- Mechanical score 0-100 and PROMISING / REVIEW / LOW result columns.
+- Screened candidates are re-ranked by mechanical opportunity.
+- Prompt emphasizes high recall for cooling towers, chillers/chiller-like equipment, substantial piping,
+  mechanical yards, large packaged equipment and complex rooftop systems.
+- Small buildings are explicitly allowed to score highly.
+- Large building size alone is explicitly NOT mechanical evidence.
+- Exact chiller-vs-tower identification is not required.
+- GIS fallback architecture from v0.7.6 retained.
+- API key is entered at runtime and is not saved to disk.
+
+FIRST TEST RECOMMENDATION:
+Do NOT Screen Top 25 initially.
+1. Discover around 717 General Booth.
+2. Screen Selected on known cases individually:
+   - 717 General Booth (should PROMISING)
+   - 912 Birdneck (should PROMISING)
+   - a known poor/ordinary property (should LOW or REVIEW)
+   - Bell Avenue candidate if visible in search (important small-building anomaly test)
+3. Only after those look reasonable, try Screen Top 25.
+
+This is intentionally a screening model, not detailed equipment inventory.
+v0.6.6 Deep Vision remains the intended later-stage analyzer for promising/ambiguous properties.

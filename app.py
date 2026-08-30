@@ -1,5 +1,5 @@
 import json,math,threading,tkinter as tk,urllib.parse,urllib.request
-from tkinter import ttk,messagebox
+from tkinter import ttk,messagebox,simpledialog
 from pathlib import Path
 
 ADDR="https://geo.vbgov.com/mapservices/rest/services/Business_Systems/Pictometry_Online/MapServer/0/query"
@@ -8,10 +8,12 @@ PARCEL="https://geo.vbgov.com/mapservices/rest/services/Business_Systems/Pictome
 CITY_BLDGS="https://geo.vbgov.com/mapservices/rest/services/Basemaps/Structures_and_Physical_Features/MapServer/6/query"
 FALLBACK_BLDGS="https://dsfmportal.dcr.virginia.gov/server/rest/services/CivilReference/Civil_Reference_Layers/MapServer/2/query"
 AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/ImageServer/exportImage"
+OPENAI_URL="https://api.openai.com/v1/responses"
+SCREEN_MODEL="gpt-5.4-mini"
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.7.6"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.8.0"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -163,24 +165,87 @@ def aerial(x,y,sf,out):
                               "imageSR":"3857","size":"1800,1800","format":"jpg"})
     with urllib.request.urlopen(AERIAL+"?"+q,timeout=120) as r:Path(out).write_bytes(r.read())
 
+def image_b64_for_property(z):
+    import base64,tempfile
+    p=Path(tempfile.gettempdir())/f"hvac_screen_{abs(hash((z['lon'],z['lat'])))}.jpg"
+    aerial(z["lon"],z["lat"],z["largest"],p)
+    return base64.b64encode(p.read_bytes()).decode("ascii")
+
+def cheap_screen(api_key,z):
+    import base64
+    b64=image_b64_for_property(z)
+    prompt="""You are doing a FAST FIRST-PASS aerial screen for commercial HVAC sales prospecting.
+Do NOT attempt a detailed equipment inventory. The goal is high recall for unusually valuable mechanical opportunities.
+
+Look for visible evidence of:
+- cooling towers or tower-like heat rejection equipment
+- air-cooled chillers or chiller-like large fan equipment
+- substantial hydronic/process piping, especially paired large pipes, complex routing, multiple 90-degree turns, or equipment-to-building connections
+- mechanical yards / central plant infrastructure
+- unusually large packaged rooftop HVAC
+- dense or complex rooftop mechanical systems
+
+Important:
+- A small building can be an excellent prospect if it has central/process cooling equipment.
+- Large building size alone is NOT evidence of mechanical opportunity.
+- Ordinary small RTUs/condensers should not score highly by themselves.
+- Grocery/retail refrigeration can resemble HVAC; flag ambiguity rather than confidently calling it central HVAC.
+- Exact chiller-vs-cooling-tower identification is NOT required at this stage.
+- Prefer false positives over missing credible central/process mechanical equipment.
+
+Return ONLY JSON with:
+{"mechanical_score":0-100,"decision":"PROMISING"|"REVIEW"|"LOW","high_value_evidence":true|false,
+"signals":["short visible signal",...],"summary":"one concise sentence"}
+Scoring guide:
+80-100 strong visible central/process/large mechanical evidence
+60-79 credible promising evidence
+40-59 ambiguous/review
+0-39 ordinary/light mechanical evidence
+"""
+    body={
+      "model":SCREEN_MODEL,
+      "reasoning":{"effort":"low"},
+      "max_output_tokens":700,
+      "input":[{"role":"user","content":[
+        {"type":"input_text","text":prompt},
+        {"type":"input_image","image_url":"data:image/jpeg;base64,"+b64}
+      ]}]
+    }
+    req=urllib.request.Request(OPENAI_URL,data=json.dumps(body).encode(),
+        headers={"Authorization":"Bearer "+api_key,"Content-Type":"application/json"})
+    with urllib.request.urlopen(req,timeout=180) as r:d=json.loads(r.read().decode())
+    text=""
+    for o in d.get("output",[]):
+        for c in o.get("content",[]):
+            if c.get("type")=="output_text":text+=c.get("text","")
+    text=text.strip()
+    if text.startswith("```"):
+        text=text.split("\n",1)[1].rsplit("```",1)[0].strip()
+    return json.loads(text)
+
+
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.7.6 — Resilient Footprint Fallback");r.geometry("1600x850")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.8.0 — Cheap Mechanical Vision Screen");r.geometry("1600x850")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach search center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=40).grid(row=0,column=1,padx=5)
         ttk.Label(t,text="Radius mi:").grid(row=0,column=2);self.rad=tk.StringVar(value="1.0");ttk.Entry(t,textvariable=self.rad,width=6).grid(row=0,column=3)
         ttk.Label(t,text="Size path min ft²:").grid(row=0,column=4);self.mn=tk.StringVar(value="10000");ttk.Entry(t,textvariable=self.mn,width=8).grid(row=0,column=5)
         self.b=ttk.Button(t,text="Discover",command=self.start);self.b.grid(row=0,column=6,padx=8)
+        ttk.Label(t,text="OpenAI key:").grid(row=0,column=7)
+        self.key=tk.StringVar();ttk.Entry(t,textvariable=self.key,width=22,show="*").grid(row=0,column=8,padx=4)
         self.st=tk.StringVar(value="Footprints: Virginia Beach city service first; Virginia CivilReference fallback automatically.")
         ttk.Label(r,textvariable=self.st).pack(fill="x",padx=10)
-        cs=("rank","address","largest","total","avg","bldgs","miles","land","zone","fcode","tier","score","path","source")
+        cs=("rank","address","largest","total","avg","bldgs","miles","land","zone","tier","score","path","mech","vision","source")
         self.tree=ttk.Treeview(r,columns=cs,show="headings")
-        for c,w in zip(cs,(45,220,80,85,75,50,55,180,55,175,70,50,70,90)):
+        for c,w in zip(cs,(45,210,75,80,70,50,55,165,50,65,50,70,55,90,90)):
             self.tree.heading(c,text=c.upper());self.tree.column(c,width=w,anchor="w")
         self.tree.pack(fill="both",expand=True,padx=10,pady=8)
         f=ttk.Frame(r,padding=10);f.pack(fill="x")
         ttk.Button(f,text="Download Aerial",command=self.dl).pack(side="left")
+        ttk.Button(f,text="Screen Selected",command=self.screen_selected).pack(side="left",padx=8)
+        ttk.Button(f,text="Screen Top 25",command=self.screen_top).pack(side="left",padx=8)
         ttk.Button(f,text="Copy Address",command=self.copy).pack(side="left",padx=8)
     def start(self):
         self.b.config(state="disabled");self.st.set("Querying parcels + building footprints (automatic fallback enabled)...")
@@ -196,7 +261,8 @@ class App:
         for n,z in enumerate(self.rows,1):
             fmt=lambda v:f"{v:,}" if v is not None else "UNKNOWN"
             self.tree.insert("","end",iid=str(n-1),values=(n,z["address"],fmt(z["largest"]),fmt(z["total"]),fmt(z["avg"]),
-                z["count"],z["distance"],z["land"],z["zone"],", ".join(z["fcodes"]),z["tier"],z["score"],z["path"],z["source"]))
+                z["count"],z["distance"],z["land"],z["zone"],z["tier"],z["score"],z["path"],
+                z.get("mech",""),z.get("vision",""),z["source"]))
         sz=sum(z["path"]=="SIZE" for z in self.rows);np,nb,nj,src,errs=self.diag
         warn=(" | fallback reason: "+errs[0][:80]) if errs and src!="VB CITY" else ""
         self.st.set(f"{len(self.rows)} prospects — SIZE {sz}, ANOMALY {len(self.rows)-sz} | parcels {np} | footprints {nb} | joined {nj} | source {src}{warn}")
@@ -214,6 +280,62 @@ class App:
             try:aerial(z["lon"],z["lat"],z["largest"],out);self.r.after(0,lambda:self.st.set("Saved "+str(out)))
             except Exception as e:self.r.after(0,lambda:self.st.set("Download failed: "+repr(e)))
         threading.Thread(target=w,daemon=True).start()
+    def getkey(self):
+        k=self.key.get().strip()
+        if not k:messagebox.showinfo("OpenAI key","Paste your OpenAI API key first.");return None
+        return k
+    def screen_one(self,i,k):
+        z=self.rows[i]
+        try:
+            r=cheap_screen(k,z)
+            z["mech"]=int(r.get("mechanical_score",0))
+            z["vision"]=r.get("decision","")
+            z["vision_summary"]=r.get("summary","")
+            z["signals"]=r.get("signals",[])
+            return None
+        except Exception as e:return str(e)
+    def refresh_row(self,i):
+        z=self.rows[i];fmt=lambda v:f"{v:,}" if v is not None else "UNKNOWN"
+        self.tree.item(str(i),values=(i+1,z["address"],fmt(z["largest"]),fmt(z["total"]),fmt(z["avg"]),
+            z["count"],z["distance"],z["land"],z["zone"],z["tier"],z["score"],z["path"],
+            z.get("mech",""),z.get("vision",""),z["source"]))
+    def screen_selected(self):
+        k=self.getkey();s=self.tree.selection()
+        if not k:return
+        if not s:messagebox.showinfo("Select","Select a candidate.");return
+        i=int(s[0]);self.st.set("Cheap visual screen running for "+self.rows[i]["address"]+"...")
+        def w():
+            e=self.screen_one(i,k)
+            self.r.after(0,lambda:self.after_screen(i,e))
+        threading.Thread(target=w,daemon=True).start()
+    def after_screen(self,i,e):
+        self.refresh_row(i)
+        z=self.rows[i]
+        if e:self.st.set("Screen failed: "+e)
+        else:self.st.set(f'{z["address"]}: mechanical {z["mech"]}/100 — {z["vision"]} — {z.get("vision_summary","")}')
+    def screen_top(self):
+        k=self.getkey()
+        if not k:return
+        # Default batch deliberately limited to 25 to control API spend.
+        ids=list(range(min(25,len(self.rows))))
+        self.st.set(f"Screening {len(ids)} candidates one image each...")
+        def w():
+            errs=0
+            for n,i in enumerate(ids,1):
+                if self.screen_one(i,k):errs+=1
+                self.r.after(0,lambda i=i:self.refresh_row(i))
+                self.r.after(0,lambda n=n:self.st.set(f"Cheap visual screen {n}/{len(ids)}..."))
+            self.r.after(0,lambda:self.finish_batch(errs))
+        threading.Thread(target=w,daemon=True).start()
+    def finish_batch(self,errs):
+        # Re-rank screened candidates by mechanical score first; unscreened retain GIS score.
+        self.rows.sort(key=lambda z:(0 if "mech" in z else 1,-z.get("mech",0),-z["score"],z["distance"]))
+        for i in self.tree.get_children():self.tree.delete(i)
+        for n,z in enumerate(self.rows,1):
+            fmt=lambda v:f"{v:,}" if v is not None else "UNKNOWN"
+            self.tree.insert("","end",iid=str(n-1),values=(n,z["address"],fmt(z["largest"]),fmt(z["total"]),fmt(z["avg"]),
+                z["count"],z["distance"],z["land"],z["zone"],z["tier"],z["score"],z["path"],z.get("mech",""),z.get("vision",""),z["source"]))
+        self.st.set(f"Visual screening complete. {errs} errors. Screened candidates re-ranked by mechanical opportunity.")
     def copy(self):
         z=self.sel()
         if z:self.r.clipboard_clear();self.r.clipboard_append(z["address"]);self.st.set("Address copied.")
