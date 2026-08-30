@@ -1,19 +1,22 @@
-HVAC Territory Discovery v0.7.4
+HVAC Territory Discovery v0.7.5
 
-Changes
-- Uses VGIN/VBMP locality-submitted building footprints instead of Microsoft computer-vision footprints.
-- Retains exact building-centroid-inside-Virginia-Beach-parcel spatial join.
-- Adds average building footprint to largest/total/count.
-- Penalizes many-small-building properties to reduce townhome/housing false positives.
-- Adds two discovery paths:
-    SIZE: largest building meets selected threshold.
-    ANOMALY: smaller non-residential site retained for later mechanical-equipment screening.
-- Small residential properties do not enter the ANOMALY path.
-- No OpenAI/API calls yet.
+Key correction:
+v0.7.4 pointed at the wrong VGIN derivative layer. v0.7.5 instead uses the City of Virginia Beach's own
+Basemaps/Structures_and_Physical_Features/MapServer/6 Building Footprints layer.
 
-Suggested regression test
-Center: 717 General Booth Blvd
-Radius: 1.0 mile
-Size path: 10,000 ft2
+The city layer contains actual planimetric building polygons plus FCODE classifications such as:
+Building Commercial, Building School, Building Government, Building Church, Pump Station,
+Substation, Parking Garage, Airplane Hangar, etc.
 
-Check 717, 912, 927/949 Birdneck area, Corning military/townhome properties, and Bell Avenue.
+Other changes:
+- strict requested-radius cutoff restored for parcel representative points
+- diagnostic counts displayed: parcels fetched, city footprints fetched, footprints spatially joined
+- FCODE shown in result table
+- two-path SIZE / ANOMALY logic retained
+- many-small-building penalty retained
+- no OpenAI/API calls yet
+
+Regression:
+717 General Booth / 1.0 mi / 10,000 ft2.
+The diagnostic line MUST show nonzero city footprints and nonzero spatial joins.
+717 and 912 should have populated building areas rather than FOOTPRINT MISSING.
