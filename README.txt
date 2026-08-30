@@ -1,18 +1,19 @@
-HVAC Territory Discovery v0.7.3 — Parcel Spatial Join
+HVAC Territory Discovery v0.7.4
 
-Core fix:
-Building footprints are no longer matched to nearby parcel reference points. Each building centroid must geometrically fall inside the actual Virginia Beach Property_Polygons parcel polygon.
+Changes
+- Uses VGIN/VBMP locality-submitted building footprints instead of Microsoft computer-vision footprints.
+- Retains exact building-centroid-inside-Virginia-Beach-parcel spatial join.
+- Adds average building footprint to largest/total/count.
+- Penalizes many-small-building properties to reduce townhome/housing false positives.
+- Adds two discovery paths:
+    SIZE: largest building meets selected threshold.
+    ANOMALY: smaller non-residential site retained for later mechanical-equipment screening.
+- Small residential properties do not enter the ANOMALY path.
+- No OpenAI/API calls yet.
 
-Per property the app reports:
-- largest building footprint
-- total building footprint
-- building count
-- parcel land use/zoning
-- prospect tier/score
-- SPATIAL JOIN or FOOTPRINT MISSING
+Suggested regression test
+Center: 717 General Booth Blvd
+Radius: 1.0 mile
+Size path: 10,000 ft2
 
-One prospect row is retained per GPIN. Multi-building campuses therefore remain one sales property while retaining their building counts/areas.
-
-Regression:
-- 928 Birdneck should no longer inherit neighboring building areas or appear as duplicate property rows.
-- 927 and 1096 Birdneck can remain through FOOTPRINT MISSING if the external footprint dataset lacks their structures.
+Check 717, 912, 927/949 Birdneck area, Corning military/townhome properties, and Bell Avenue.
