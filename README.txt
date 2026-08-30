@@ -1,22 +1,15 @@
-HVAC Territory Discovery v0.7.5
+HVAC Territory Discovery v0.7.6
 
-Key correction:
-v0.7.4 pointed at the wrong VGIN derivative layer. v0.7.5 instead uses the City of Virginia Beach's own
-Basemaps/Structures_and_Physical_Features/MapServer/6 Building Footprints layer.
-
-The city layer contains actual planimetric building polygons plus FCODE classifications such as:
-Building Commercial, Building School, Building Government, Building Church, Pump Station,
-Substation, Parking Garage, Airplane Hangar, etc.
-
-Other changes:
-- strict requested-radius cutoff restored for parcel representative points
-- diagnostic counts displayed: parcels fetched, city footprints fetched, footprints spatially joined
-- FCODE shown in result table
-- two-path SIZE / ANOMALY logic retained
-- many-small-building penalty retained
-- no OpenAI/API calls yet
+Resilience update:
+- Tries City of Virginia Beach Building Footprints first.
+- If the city service is stopped/errors/returns zero, automatically falls back to Virginia CivilReference Building_Footprints.
+- The fallback is the source used successfully in v0.7.3 and is currently published by Virginia DCR/VGIN.
+- A footprint-source outage no longer aborts the entire search.
+- Status line reports active footprint source, footprint count, spatial joins, and fallback reason.
+- Parcel/address/land-use data remains Virginia Beach Pictometry Property_Polygons.
+- SIZE / ANOMALY paths and many-small-building penalty retained.
+- No OpenAI calls.
 
 Regression:
-717 General Booth / 1.0 mi / 10,000 ft2.
-The diagnostic line MUST show nonzero city footprints and nonzero spatial joins.
-717 and 912 should have populated building areas rather than FOOTPRINT MISSING.
+717 General Booth Blvd / 1.0 mi / 10,000 ft2.
+Expected during current city-service outage: source VA CIVILREF, with nonzero footprints and joins.

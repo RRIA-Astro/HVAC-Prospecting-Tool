@@ -5,12 +5,13 @@ from pathlib import Path
 ADDR="https://geo.vbgov.com/mapservices/rest/services/Business_Systems/Pictometry_Online/MapServer/0/query"
 PARCEL="https://geo.vbgov.com/mapservices/rest/services/Business_Systems/Pictometry_Online/MapServer/4/query"
 # City of Virginia Beach authoritative planimetric Building Footprints
-BLDGS="https://geo.vbgov.com/mapservices/rest/services/Basemaps/Structures_and_Physical_Features/MapServer/6/query"
+CITY_BLDGS="https://geo.vbgov.com/mapservices/rest/services/Basemaps/Structures_and_Physical_Features/MapServer/6/query"
+FALLBACK_BLDGS="https://dsfmportal.dcr.virginia.gov/server/rest/services/CivilReference/Civil_Reference_Layers/MapServer/2/query"
 AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/ImageServer/exportImage"
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.7.5"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.7.6"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -78,20 +79,37 @@ def load_parcels(x,y,mi):
                     "lon":lon,"lat":lat,"rings":rs,"psq":area(rs)})
     return out
 
-def load_buildings(x,y,mi):
+def _query_buildings(url,x,y,mi,outfields):
     a,b,c,d=bbox(x,y,mi)
     p={"f":"json","where":"1=1","geometry":f"{a},{b},{c},{d}","geometryType":"esriGeometryEnvelope",
-       "inSR":"4326","spatialRel":"esriSpatialRelIntersects","outFields":"OBJECTID,fcode,height_highest",
+       "inSR":"4326","spatialRel":"esriSpatialRelIntersects","outFields":outfields,
        "returnGeometry":"true","outSR":"4326"}
     out=[]
-    for f in pages(BLDGS,p):
+    for f in pages(url,p):
         rs=f.get("geometry",{}).get("rings",[]);cx,cy=centroid(rs)
         if cx is None:continue
         if miles(x,y,cx,cy)<=mi*1.03:
             at=f.get("attributes",{})
             out.append({"lon":cx,"lat":cy,"sq":round(area(rs)),
-                        "fcode":at.get("fcode") or "","height":at.get("height_highest")})
+                        "fcode":at.get("fcode") or at.get("FCODE") or "",
+                        "height":at.get("height_highest")})
     return out
+
+def load_buildings(x,y,mi):
+    errors=[]
+    try:
+        b=_query_buildings(CITY_BLDGS,x,y,mi,"*")
+        if b:return b,"VB CITY",errors
+        errors.append("VB CITY returned 0 footprints")
+    except Exception as e:
+        errors.append("VB CITY: "+str(e))
+    try:
+        b=_query_buildings(FALLBACK_BLDGS,x,y,mi,"*")
+        if b:return b,"VA CIVILREF",errors
+        errors.append("VA CIVILREF returned 0 footprints")
+    except Exception as e:
+        errors.append("VA CIVILREF: "+str(e))
+    return [],"NONE",errors
 
 def classify(land,zone,largest,avg,count,fcodes):
     s=(land+" "+zone+" "+" ".join(fcodes)).upper()
@@ -108,7 +126,7 @@ def classify(land,zone,largest,avg,count,fcodes):
     return t,max(0,min(95,score))
 
 def discover(x,y,mi,mn):
-    ps=load_parcels(x,y,mi);bs=load_buildings(x,y,mi)
+    ps=load_parcels(x,y,mi);bs,bsource,berrors=load_buildings(x,y,mi)
     joined=0
     for b in bs:
         hits=[p for p in ps if pinpoly(b["lon"],b["lat"],p["rings"])]
@@ -128,7 +146,7 @@ def discover(x,y,mi,mn):
                  distance=round(miles(x,y,p["lon"],p["lat"]),2))
         p["tier"],p["score"]=classify(p["land"],p["zone"],largest,avg,count,fcodes)
         p["path"]="SIZE" if sizepass else "ANOMALY"
-        p["source"]="VB CITY" if bl else "FOOTPRINT MISSING"
+        p["source"]=bsource if bl else "FOOTPRINT MISSING"
         rows.append(p)
     ded={}
     for p in rows:
@@ -136,7 +154,7 @@ def discover(x,y,mi,mn):
         if k not in ded:ded[k]=p
     out=list(ded.values())
     out.sort(key=lambda z:(-z["score"],0 if z["path"]=="SIZE" else 1,-(z["largest"] or 0),z["distance"]))
-    return out[:250],len(ps),len(bs),joined
+    return out[:250],len(ps),len(bs),joined,bsource,berrors
 
 def aerial(x,y,sf,out):
     side=max(650,min(1800,math.sqrt(max(sf or 30000,1))*3.2));h=side*.3048/2;R=6378137
@@ -147,14 +165,14 @@ def aerial(x,y,sf,out):
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.7.5 — Virginia Beach City Footprints");r.geometry("1600x850")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.7.6 — Resilient Footprint Fallback");r.geometry("1600x850")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach search center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=40).grid(row=0,column=1,padx=5)
         ttk.Label(t,text="Radius mi:").grid(row=0,column=2);self.rad=tk.StringVar(value="1.0");ttk.Entry(t,textvariable=self.rad,width=6).grid(row=0,column=3)
         ttk.Label(t,text="Size path min ft²:").grid(row=0,column=4);self.mn=tk.StringVar(value="10000");ttk.Entry(t,textvariable=self.mn,width=8).grid(row=0,column=5)
         self.b=ttk.Button(t,text="Discover",command=self.start);self.b.grid(row=0,column=6,padx=8)
-        self.st=tk.StringVar(value="Uses City of Virginia Beach planimetric building footprints.")
+        self.st=tk.StringVar(value="Footprints: Virginia Beach city service first; Virginia CivilReference fallback automatically.")
         ttk.Label(r,textvariable=self.st).pack(fill="x",padx=10)
         cs=("rank","address","largest","total","avg","bldgs","miles","land","zone","fcode","tier","score","path","source")
         self.tree=ttk.Treeview(r,columns=cs,show="headings")
@@ -165,13 +183,13 @@ class App:
         ttk.Button(f,text="Download Aerial",command=self.dl).pack(side="left")
         ttk.Button(f,text="Copy Address",command=self.copy).pack(side="left",padx=8)
     def start(self):
-        self.b.config(state="disabled");self.st.set("Querying Virginia Beach parcels + city building footprints...")
+        self.b.config(state="disabled");self.st.set("Querying parcels + building footprints (automatic fallback enabled)...")
         threading.Thread(target=self.work,daemon=True).start()
     def work(self):
         try:
             x,y=geocode(self.q.get().strip())
-            self.rows,np,nb,nj=discover(x,y,float(self.rad.get()),float(self.mn.get()))
-            self.diag=(np,nb,nj);self.r.after(0,self.show)
+            self.rows,np,nb,nj,src,errs=discover(x,y,float(self.rad.get()),float(self.mn.get()))
+            self.diag=(np,nb,nj,src,errs);self.r.after(0,self.show)
         except Exception as e:self.r.after(0,lambda e=e:self.fail(e))
     def show(self):
         for i in self.tree.get_children():self.tree.delete(i)
@@ -179,8 +197,9 @@ class App:
             fmt=lambda v:f"{v:,}" if v is not None else "UNKNOWN"
             self.tree.insert("","end",iid=str(n-1),values=(n,z["address"],fmt(z["largest"]),fmt(z["total"]),fmt(z["avg"]),
                 z["count"],z["distance"],z["land"],z["zone"],", ".join(z["fcodes"]),z["tier"],z["score"],z["path"],z["source"]))
-        sz=sum(z["path"]=="SIZE" for z in self.rows);np,nb,nj=self.diag
-        self.st.set(f"{len(self.rows)} prospects — SIZE {sz}, ANOMALY {len(self.rows)-sz} | parcels {np} | city footprints {nb} | spatially joined {nj}")
+        sz=sum(z["path"]=="SIZE" for z in self.rows);np,nb,nj,src,errs=self.diag
+        warn=(" | fallback reason: "+errs[0][:80]) if errs and src!="VB CITY" else ""
+        self.st.set(f"{len(self.rows)} prospects — SIZE {sz}, ANOMALY {len(self.rows)-sz} | parcels {np} | footprints {nb} | joined {nj} | source {src}{warn}")
         self.b.config(state="normal")
     def fail(self,e):self.st.set("Failed: "+repr(e));self.b.config(state="normal")
     def sel(self):
