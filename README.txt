@@ -1,14 +1,20 @@
-HVAC Territory Discovery v0.8.2
+HVAC Territory Discovery v0.8.3 — Visual Debug Control
 
-Perimeter-focused visual screening.
-For up to two largest distinct buildings, one API call now receives:
-- property overview
-- roof/context view
-- north perimeter
-- south perimeter
-- east perimeter
-- west perimeter
+Purpose: isolate the 912 Birdneck false-negative.
 
-Purpose: fix false negatives where high-value chillers/cooling towers sit beside buildings.
-First regression: 912 Birdneck only. If it still returns LOW, stop batch testing; the next build should save/show
-the exact generated crops so we can debug aerial targeting directly.
+Changes:
+- The FIRST image sent to GPT is now generated with EXACTLY the same aerial() function and framing as the GUI's Download Aerial button.
+- Existing overview + roof/context + N/S/E/W perimeter images remain.
+- New "Save Screening Images" button writes every exact image generated for screening to:
+  Downloads/HVAC_SCREEN_DEBUG_<address>/
+- The folder includes numbered JPGs and a README identifying each view.
+- Saving images makes NO OpenAI API call.
+
+TEST:
+1. Discover 912 Birdneck.
+2. Select it and click Save Screening Images.
+3. Open image 01. It should match the useful Download Aerial framing where the chiller is easily visible.
+4. Inspect the other images and note which image(s) clearly show the chiller.
+5. Then run Screen Selected once.
+
+If GPT still returns LOW while image 01 clearly shows the chiller, we have isolated a model-recognition/attention problem rather than a GIS/crop-targeting problem.

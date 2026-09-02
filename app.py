@@ -13,7 +13,7 @@ SCREEN_MODEL="gpt-5.4-mini"
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.8.2"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.8.3"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -179,9 +179,15 @@ def offset_lonlat(lon,lat,east_ft,north_ft):
 def screen_images(z):
     import base64,tempfile
     td=Path(tempfile.gettempdir());imgs=[];tag=abs(hash((z["lon"],z["lat"])))
+
+    # CONTROL: exactly the same framing produced by the GUI's Download Aerial button.
+    p=td/f"hvac_v083_{tag}_CONTROL_download_aerial.jpg"
+    aerial(z["lon"],z["lat"],z["largest"],p)
+    imgs.append(("CONTROL — EXACT DOWNLOAD AERIAL FRAMING",base64.b64encode(p.read_bytes()).decode("ascii"),p))
+
     overview_side=max(900,min(2200,math.sqrt(max(z.get("total") or z.get("largest") or 30000,1))*4.0))
-    p=td/f"hvac_v082_{tag}_overview.jpg";aerial_at(z["lon"],z["lat"],overview_side,1600,p)
-    imgs.append(("PROPERTY OVERVIEW",base64.b64encode(p.read_bytes()).decode("ascii")))
+    p=td/f"hvac_v083_{tag}_overview.jpg";aerial_at(z["lon"],z["lat"],overview_side,1600,p)
+    imgs.append(("PROPERTY OVERVIEW",base64.b64encode(p.read_bytes()).decode("ascii"),p))
 
     bs=sorted(z.get("buildings",[]),key=lambda b:b.get("sq",0),reverse=True)
     chosen=[]
@@ -194,19 +200,20 @@ def screen_images(z):
     for bi,b in enumerate(chosen,1):
         sq=max(b.get("sq") or 30000,5000);span=max(120,min(420,math.sqrt(sq)))
         context=max(430,min(800,span*2.0))
-        p=td/f"hvac_v082_{tag}_b{bi}_center.jpg";aerial_at(b["lon"],b["lat"],context,1400,p)
-        imgs.append((f"BUILDING {bi} ROOF AND IMMEDIATE CONTEXT",base64.b64encode(p.read_bytes()).decode("ascii")))
+        p=td/f"hvac_v083_{tag}_b{bi}_center.jpg";aerial_at(b["lon"],b["lat"],context,1400,p)
+        imgs.append((f"BUILDING {bi} ROOF AND IMMEDIATE CONTEXT",base64.b64encode(p.read_bytes()).decode("ascii"),p))
         off=max(90,min(260,span*.62));side=max(330,min(560,span*1.35))
         for label,ef,nf in (("NORTH",0,off),("SOUTH",0,-off),("EAST",off,0),("WEST",-off,0)):
             lon,lat=offset_lonlat(b["lon"],b["lat"],ef,nf)
-            p=td/f"hvac_v082_{tag}_b{bi}_{label}.jpg";aerial_at(lon,lat,side,1400,p)
-            imgs.append((f"BUILDING {bi} {label} PERIMETER",base64.b64encode(p.read_bytes()).decode("ascii")))
+            p=td/f"hvac_v083_{tag}_b{bi}_{label}.jpg";aerial_at(lon,lat,side,1400,p)
+            imgs.append((f"BUILDING {bi} {label} PERIMETER",base64.b64encode(p.read_bytes()).decode("ascii"),p))
     return imgs
 
 def cheap_screen(api_key,z):
     imgs=screen_images(z)
     prompt="""You are performing a HIGH-RECALL first-pass aerial screen for commercial HVAC sales prospects.
-You receive a PROPERTY OVERVIEW and targeted BUILDING/PERIMETER views.
+You receive a CONTROL image using the app's normal Download Aerial framing, plus a PROPERTY OVERVIEW and targeted BUILDING/PERIMETER views.
+The CONTROL image is especially important: inspect it independently before reviewing the crops.
 
 MANDATORY: inspect EVERY supplied image. For each building, inspect NORTH, SOUTH, EAST and WEST perimeter
 views before deciding LOW. Do not stop after noticing ordinary rooftop RTUs: valuable chillers, cooling towers,
@@ -236,7 +243,7 @@ Return ONLY JSON:
 0-39 ordinary/light mechanical evidence
 """
     content=[{"type":"input_text","text":prompt}]
-    for label,b64 in imgs:
+    for label,b64,_path in imgs:
         content += [{"type":"input_text","text":label},{"type":"input_image","image_url":"data:image/jpeg;base64,"+b64}]
     body={"model":SCREEN_MODEL,"reasoning":{"effort":"low"},"max_output_tokens":950,
           "input":[{"role":"user","content":content}]}
@@ -255,7 +262,7 @@ Return ONLY JSON:
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.8.2 — Perimeter Mechanical Screen");r.geometry("1600x850")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.8.3 — Visual Debug Control");r.geometry("1600x850")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach search center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=40).grid(row=0,column=1,padx=5)
@@ -273,6 +280,7 @@ class App:
         self.tree.pack(fill="both",expand=True,padx=10,pady=8)
         f=ttk.Frame(r,padding=10);f.pack(fill="x")
         ttk.Button(f,text="Download Aerial",command=self.dl).pack(side="left")
+        ttk.Button(f,text="Save Screening Images",command=self.save_screen_images).pack(side="left",padx=8)
         ttk.Button(f,text="Screen Selected",command=self.screen_selected).pack(side="left",padx=8)
         ttk.Button(f,text="Screen Top 25",command=self.screen_top).pack(side="left",padx=8)
         ttk.Button(f,text="Copy Address",command=self.copy).pack(side="left",padx=8)
@@ -308,6 +316,25 @@ class App:
         def w():
             try:aerial(z["lon"],z["lat"],z["largest"],out);self.r.after(0,lambda:self.st.set("Saved "+str(out)))
             except Exception as e:self.r.after(0,lambda:self.st.set("Download failed: "+repr(e)))
+        threading.Thread(target=w,daemon=True).start()
+    def save_screen_images(self):
+        z=self.sel()
+        if not z:return
+        safe="".join(c if c.isalnum() or c in "-_" else "_" for c in (z["address"] or "candidate"))
+        outdir=Path.home()/"Downloads"/f"HVAC_SCREEN_DEBUG_{safe}"
+        self.st.set("Generating exact screening images...")
+        def w():
+            try:
+                imgs=screen_images(z);outdir.mkdir(parents=True,exist_ok=True)
+                for n,(label,_b64,p) in enumerate(imgs,1):
+                    lname="".join(c if c.isalnum() or c in "-_" else "_" for c in label)[:70]
+                    shutil.copy2(p,outdir/f"{n:02d}_{lname}.jpg")
+                manifest=outdir/"README.txt"
+                manifest.write_text("These are the exact image files/framing generated for the GPT screening call.\\n"
+                                    "Image 01 is the same framing as Download Aerial.\\n\\n"+
+                                    "\\n".join(f"{n:02d}  {label}" for n,(label,_b64,_p) in enumerate(imgs,1)))
+                self.r.after(0,lambda:self.st.set(f"Saved {len(imgs)} exact screening images to {outdir}"))
+            except Exception as e:self.r.after(0,lambda:self.st.set("Save screening images failed: "+repr(e)))
         threading.Thread(target=w,daemon=True).start()
     def getkey(self):
         k=self.key.get().strip()
