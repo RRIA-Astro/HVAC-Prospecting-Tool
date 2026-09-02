@@ -1,6 +1,5 @@
-import shutil
-import json,math,threading,tkinter as tk,urllib.parse,urllib.request
-from tkinter import ttk,messagebox,simpledialog
+import base64,json,math,threading,tkinter as tk,urllib.parse,urllib.request,tempfile
+from tkinter import ttk,messagebox
 from pathlib import Path
 
 ADDR="https://geo.vbgov.com/mapservices/rest/services/Business_Systems/Pictometry_Online/MapServer/0/query"
@@ -9,12 +8,10 @@ PARCEL="https://geo.vbgov.com/mapservices/rest/services/Business_Systems/Pictome
 CITY_BLDGS="https://geo.vbgov.com/mapservices/rest/services/Basemaps/Structures_and_Physical_Features/MapServer/6/query"
 FALLBACK_BLDGS="https://dsfmportal.dcr.virginia.gov/server/rest/services/CivilReference/Civil_Reference_Layers/MapServer/2/query"
 AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/ImageServer/exportImage"
-OPENAI_URL="https://api.openai.com/v1/responses"
-SCREEN_MODEL="gpt-5.4-mini"
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.8.3.1"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.0"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -116,17 +113,47 @@ def load_buildings(x,y,mi):
 
 def classify(land,zone,largest,avg,count,fcodes):
     s=(land+" "+zone+" "+" ".join(fcodes)).upper()
-    high=("HOSP","MEDICAL","UNIVERS","COLLEGE","INDUSTR","MANUFACTUR","GOVERN","SCHOOL",
-          "WAREHOUSE","DISTRIBUT","UTILITY","PUBLIC/SEMI PUBLIC","PUMP STATION","SUBSTATION")
-    low=("APART","CONDO","MULTI FAMILY","MULTIFAMILY","RESTAUR","RETAIL","SHOPPING","STORE",
-         "SINGLE FAMILY","DUPLEX")
-    med=("OFFICE","HOTEL","MOTEL","CHURCH","RELIG","ASSEMBLY","ENTERTAIN","AUTO","COMMERCIAL","MILITARY")
-    t="HIGH" if any(k in s for k in high) else "LOW" if any(k in s for k in low) else "MEDIUM" if any(k in s for k in med) else "UNKNOWN"
-    score={"HIGH":75,"MEDIUM":55,"UNKNOWN":50,"LOW":20}[t]
-    if largest:score+=10 if largest>=75000 else 6 if largest>=40000 else 3 if largest>=20000 else 0
-    if count>=12 and avg and avg<10000:score-=20
-    elif count>=6 and avg and avg<7000:score-=12
-    return t,max(0,min(95,score))
+    very_high=("HOSP","MEDICAL","UNIVERS","COLLEGE","INDUSTR","MANUFACTUR","UTILITY","PUMP STATION","SUBSTATION")
+    high=("GOVERN","SCHOOL","PUBLIC/SEMI PUBLIC","WAREHOUSE","DISTRIBUT")
+    low=("APART","CONDO","MULTI FAMILY","MULTIFAMILY","RESTAUR","RETAIL","SHOPPING","STORE","SINGLE FAMILY","DUPLEX")
+    medium=("OFFICE","HOTEL","MOTEL","CHURCH","RELIG","ASSEMBLY","ENTERTAIN","AUTO","COMMERCIAL","MILITARY")
+    if any(k in s for k in very_high): tier,score="HIGH",82
+    elif any(k in s for k in high): tier,score="HIGH",74
+    elif any(k in s for k in low): tier,score="LOW",18
+    elif any(k in s for k in medium): tier,score="MEDIUM",52
+    else:tier,score="UNKNOWN",42
+
+    # One/few substantial buildings matter more than aggregate campus area.
+    if largest:
+        score += 16 if largest>=100000 else 13 if largest>=75000 else 9 if largest>=40000 else 5 if largest>=20000 else 2 if largest>=10000 else 0
+    if avg:
+        score += 5 if avg>=40000 else 3 if avg>=20000 else 0
+    # Penalize townhome / many-small-building morphology.
+    if count>=20 and avg and avg<10000:score-=28
+    elif count>=10 and avg and avg<10000:score-=20
+    elif count>=6 and avg and avg<7000:score-=14
+    # Missing footprints are retained in discovery but should not consume Deep Vision budget first.
+    if largest is None:score-=10
+    return tier,max(0,min(99,score))
+
+def prescreen(p,mn):
+    """Cheap non-vision gate. High recall for central/process HVAC opportunities."""
+    land=(p["land"]+" "+p["zone"]+" "+" ".join(p.get("fcodes",[]))).upper()
+    largest=p.get("largest");avg=p.get("avg");count=p.get("count",0)
+    residential=any(k in land for k in ("SINGLE FAMILY","DUPLEX","MULTI FAMILY","MULTIFAMILY","APART","CONDO"))
+    poor_use=any(k in land for k in ("RESTAUR","RETAIL","SHOPPING","STORE"))
+    priority=any(k in land for k in ("HOSP","MEDICAL","UNIVERS","COLLEGE","INDUSTR","MANUFACTUR","UTILITY",
+                                     "PUMP STATION","SUBSTATION","GOVERN","SCHOOL","PUBLIC/SEMI PUBLIC","MILITARY",
+                                     "WAREHOUSE","DISTRIBUT"))
+    many_small=count>=10 and avg and avg<10000
+
+    if residential:return False,"RESIDENTIAL"
+    if many_small and not priority:return False,"MANY SMALL"
+    if largest is None:return False,"NO FOOTPRINT"
+    if largest>=max(mn,20000):return True,"SIZE"
+    if priority and largest>=2500:return True,"PRIORITY EXCEPTION"
+    if not poor_use and largest>=10000:return True,"COMMERCIAL SIZE"
+    return False,"FILTERED"
 
 def discover(x,y,mi,mn):
     ps=load_parcels(x,y,mi);bs,bsource,berrors=load_buildings(x,y,mi)
@@ -141,23 +168,21 @@ def discover(x,y,mi,mn):
         total=sum(b["sq"] for b in bl) if bl else None;count=len(bl);avg=round(total/count) if count else None
         fcodes=sorted(set(b["fcode"] for b in bl if b["fcode"]))
         land=(p["land"]+" "+p["zone"]).upper()
-        sizepass=largest is not None and largest>=mn
-        residential=any(k in land for k in ("SINGLE FAMILY","DUPLEX","MULTI FAMILY","MULTIFAMILY","APART","CONDO"))
-        anomaly_eligible=not residential
-        if not sizepass and not anomaly_eligible:continue
+        if any(k in land for k in ("SINGLE FAMILY","DUPLEX")):continue
         p.update(largest=largest,total=total,count=count,avg=avg,fcodes=fcodes,buildings=bl,
                  distance=round(miles(x,y,p["lon"],p["lat"]),2))
         p["tier"],p["score"]=classify(p["land"],p["zone"],largest,avg,count,fcodes)
-        p["path"]="SIZE" if sizepass else "ANOMALY"
+        p["pre"],p["pre_reason"]=prescreen(p,mn)
         p["source"]=bsource if bl else "FOOTPRINT MISSING"
         rows.append(p)
     ded={}
     for p in rows:
         k=p["gpin"] or "A:"+p["address"].upper().strip()
-        if k not in ded:ded[k]=p
+        if k not in ded or p["score"]>ded[k]["score"]:ded[k]=p
     out=list(ded.values())
-    out.sort(key=lambda z:(-z["score"],0 if z["path"]=="SIZE" else 1,-(z["largest"] or 0),z["distance"]))
+    out.sort(key=lambda z:(0 if z["pre"] else 1,-z["score"],-(z["largest"] or 0),z["distance"]))
     return out[:250],len(ps),len(bs),joined,bsource,berrors
+
 
 def aerial(x,y,sf,out):
     side=max(650,min(1800,math.sqrt(max(sf or 30000,1))*3.2));h=side*.3048/2;R=6378137
@@ -166,236 +191,206 @@ def aerial(x,y,sf,out):
                               "imageSR":"3857","size":"1800,1800","format":"jpg"})
     with urllib.request.urlopen(AERIAL+"?"+q,timeout=120) as r:Path(out).write_bytes(r.read())
 
-def aerial_at(x,y,side_ft,pixels,out):
-    h=side_ft*.3048/2;R=6378137
-    X=R*math.radians(x);Y=R*math.log(math.tan(math.pi/4+math.radians(y)/2))
-    q=urllib.parse.urlencode({"f":"image","bbox":f"{X-h},{Y-h},{X+h},{Y+h}",
-                              "bboxSR":"3857","imageSR":"3857","size":f"{pixels},{pixels}","format":"jpg"})
-    with urllib.request.urlopen(AERIAL+"?"+q,timeout=120) as r:Path(out).write_bytes(r.read())
 
-def offset_lonlat(lon,lat,east_ft,north_ft):
-    return (lon+east_ft/(69.172*5280*max(.2,math.cos(math.radians(lat)))),
-            lat+north_ft/(69.0*5280))
+# ---------------- Deep Vision v0.6.6 Connection Tracing engine ----------------
+from PIL import Image
+from openai import OpenAI
+MODEL="gpt-5.4-mini"
+OBS={"type":"object","additionalProperties":False,"properties":{k:{"type":"object","additionalProperties":False,
+"properties":{"status":{"type":"string","enum":["strong","probable","possible","not_observed"]},
+"quantity":{"type":"string","enum":["none","one","few","several","many","unknown"]},
+"confidence":{"type":"integer"},"evidence":{"type":"string"}},
+"required":["status","quantity","confidence","evidence"]} for k in
+["cooling_towers","air_cooled_chillers","large_packaged_hvac","small_packaged_hvac","condensers","piping","mechanical_yard"]},
+"required":["cooling_towers","air_cooled_chillers","large_packaged_hvac","small_packaged_hvac","condensers","piping","mechanical_yard"]}
+FINAL={"type":"object","additionalProperties":False,"properties":{
+"class":{"type":"string","enum":["GOOD","MAYBE","POOR"]},"score":{"type":"integer"},"confidence":{"type":"integer"},
+"cooling_towers":{"type":"string"},"air_cooled_chillers":{"type":"string"},"large_packaged_hvac":{"type":"string"},
+"small_packaged_hvac":{"type":"string"},"piping":{"type":"string"},"central_system_evidence":{"type":"string"},
+"ambiguities":{"type":"array","items":{"type":"string"}},"summary":{"type":"string"}},
+"required":["class","score","confidence","cooling_towers","air_cooled_chillers","large_packaged_hvac","small_packaged_hvac",
+"piping","central_system_evidence","ambiguities","summary"]}
 
-def screen_images(z):
-    import base64,tempfile
-    td=Path(tempfile.gettempdir());imgs=[];tag=abs(hash((z["lon"],z["lat"])))
+IP="""BLIND COMMERCIAL HVAC FORENSIC AERIAL INSPECTION. Inspect ALL visible roof AND ground/perimeter areas.
 
-    # CONTROL: exactly the same framing produced by the GUI's Download Aerial button.
-    p=td/f"hvac_v083_{tag}_CONTROL_download_aerial.jpg"
-    aerial(z["lon"],z["lat"],z["largest"],p)
-    imgs.append(("CONTROL — EXACT DOWNLOAD AERIAL FRAMING",base64.b64encode(p.read_bytes()).decode("ascii"),p))
+The prospecting objective is HIGH RECALL for expensive/complex mechanical opportunities. Exact inventory is secondary.
 
-    overview_side=max(900,min(2200,math.sqrt(max(z.get("total") or z.get("largest") or 30000,1))*4.0))
-    p=td/f"hvac_v083_{tag}_overview.jpg";aerial_at(z["lon"],z["lat"],overview_side,1600,p)
-    imgs.append(("PROPERTY OVERVIEW",base64.b64encode(p.read_bytes()).decode("ascii"),p))
+CONNECTION-TRACING RULES:
+- Large fan equipment alone does not prove a chiller. Inspect what connects to it.
+- Hydronic/process evidence is WEIGHTED, not gated on visible valves/flanges. Valves and specialties may be indoors.
+- Strong evidence can include substantial pipe diameter; paired supply/return; multiple 90-degree turns or complex purposeful routing;
+  elevation changes/supports; direct equipment-to-building or penthouse termination; insulation; and, when visible, valves/flanges/headers/pumps.
+- Large-diameter piping with several purposeful bends that enters a building can be strong water-system evidence even when valves are not visible.
+- White pipe is NOT automatically PVC. Color is not diagnostic.
+- Small simple PVC condensate drainage remains positive evidence for packaged DX and against a water chiller interpretation.
+- Trace credible piping in BOTH directions and reconsider ambiguous equipment based on what the piping connects.
+- Search for conventional cooling towers plus low-profile/screened towers, closed-circuit fluid coolers, evaporative condensers,
+  induced-draft heat rejection, and atypical process chillers.
+- Mechanical complexity alone does not establish a central plant.
+- Large-tonnage packaged RTUs can still make a property worthwhile, but numerous small RTUs alone are weak.
+- Never treat not_observed in one crop as proof of absence. Use quantity bands rather than exact counts.
+Do not infer occupant, address, or business identity."""
 
-    bs=sorted(z.get("buildings",[]),key=lambda b:b.get("sq",0),reverse=True)
-    chosen=[]
-    for b in bs:
-        if any(miles(b["lon"],b["lat"],q["lon"],q["lat"])<0.03 for q in chosen):continue
-        chosen.append(b)
-        if len(chosen)>=2:break
-    if not chosen:chosen=[{"lon":z["lon"],"lat":z["lat"],"sq":z.get("largest") or 30000}]
+SP="""Synthesize overlapping observations for ONE property and deduplicate them.
+Prioritize the sales question: is there credible visible evidence of high-value central/process HVAC, cooling towers, chillers,
+substantial hydronic/process piping, mechanical yards, or unusually large packaged equipment?
 
-    for bi,b in enumerate(chosen,1):
-        sq=max(b.get("sq") or 30000,5000);span=max(120,min(420,math.sqrt(sq)))
-        context=max(430,min(800,span*2.0))
-        p=td/f"hvac_v083_{tag}_b{bi}_center.jpg";aerial_at(b["lon"],b["lat"],context,1400,p)
-        imgs.append((f"BUILDING {bi} ROOF AND IMMEDIATE CONTEXT",base64.b64encode(p.read_bytes()).decode("ascii"),p))
-        off=max(90,min(260,span*.62));side=max(330,min(560,span*1.35))
-        for label,ef,nf in (("NORTH",0,off),("SOUTH",0,-off),("EAST",off,0),("WEST",-off,0)):
-            lon,lat=offset_lonlat(b["lon"],b["lat"],ef,nf)
-            p=td/f"hvac_v083_{tag}_b{bi}_{label}.jpg";aerial_at(lon,lat,side,1400,p)
-            imgs.append((f"BUILDING {bi} {label} PERIMETER",base64.b64encode(p.read_bytes()).decode("ascii"),p))
-    return imgs
+Use connection evidence as a WEIGHTED chain:
+substantial diameter + paired runs + multiple purposeful 90-degree turns + building/equipment termination + insulation/supports
+can establish strong hydronic/process evidence even without visible valves/flanges. Valves may be indoors.
+White pipe is not automatically PVC. Small simple drain routing is DX evidence.
+If credible piping exists, trace its reported endpoints and reconsider connected equipment, including atypical process chillers
+and nonstandard heat rejection. Do not invent a central plant merely from many RTUs.
+Favor recall for prospecting: false negatives on major central/process equipment are worse than small RTU count errors or
+chiller-vs-tower ambiguity. Exact tower-vs-chiller identity is less important than correctly flagging the property as worth pursuing."""
 
-def cheap_screen(api_key,z):
-    imgs=screen_images(z)
-    prompt="""You are performing a HIGH-RECALL first-pass aerial screen for commercial HVAC sales prospects.
-You receive a CONTROL image using the app's normal Download Aerial framing, plus a PROPERTY OVERVIEW and targeted BUILDING/PERIMETER views.
-The CONTROL image is especially important: inspect it independently before reviewing the crops.
-
-MANDATORY: inspect EVERY supplied image. For each building, inspect NORTH, SOUTH, EAST and WEST perimeter
-views before deciding LOW. Do not stop after noticing ordinary rooftop RTUs: valuable chillers, cooling towers,
-piping and mechanical yards are often on the ground immediately beside a wall.
-
-Actively search for cooling towers; air-cooled chillers or chiller-like fan arrays; substantial hydronic/process
-piping; paired large pipes; complex purposeful pipe routing; mechanical yards/central plants; unusually large
-packaged equipment; and dense/complex mechanical systems.
-
-Exact chiller-vs-cooling-tower naming is secondary. If substantial side equipment is ambiguous between those
-categories but has large scale, piping, or central-system context, score the SITE highly. White insulated
-hydronic pipe can resemble PVC; large diameter + multiple bends + purposeful building entry is meaningful.
-Small buildings can be excellent prospects. Building size alone is not evidence. Ordinary small RTUs and
-condensers alone should remain LOW.
-
-Before returning LOW, verify every supplied perimeter view was inspected and none contains credible large
-side-mounted mechanical equipment or substantial piping.
-
-Return ONLY JSON:
-{"mechanical_score":0-100,"decision":"PROMISING"|"REVIEW"|"LOW","high_value_evidence":true|false,
-"best_view":"exact supplied view label","perimeter_checked":true,
-"signals":["short visible signal",...],"summary":"one concise sentence"}
-
-80-100 strong central/process/large mechanical evidence
-60-79 credible promising evidence
-40-59 ambiguous/review
-0-39 ordinary/light mechanical evidence
-"""
-    content=[{"type":"input_text","text":prompt}]
-    for label,b64,_path in imgs:
-        content += [{"type":"input_text","text":label},{"type":"input_image","image_url":"data:image/jpeg;base64,"+b64}]
-    body={"model":SCREEN_MODEL,"reasoning":{"effort":"low"},"max_output_tokens":950,
-          "input":[{"role":"user","content":content}]}
-    req=urllib.request.Request(OPENAI_URL,data=json.dumps(body).encode(),
-        headers={"Authorization":"Bearer "+api_key,"Content-Type":"application/json"})
-    with urllib.request.urlopen(req,timeout=300) as r:d=json.loads(r.read().decode())
-    text=""
-    for o in d.get("output",[]):
-        for c in o.get("content",[]):
-            if c.get("type")=="output_text":text+=c.get("text","")
-    text=text.strip()
-    if text.startswith("```"):text=text.split("\n",1)[1].rsplit("```",1)[0].strip()
-    ans=json.loads(text);ans["_views"]=len(imgs)
-    return ans
-
+def dv_url(p):
+    return "data:image/jpeg;base64,"+base64.b64encode(Path(p).read_bytes()).decode()
+def dv_ask(c,prompt,content,schema,name,tok=5000,effort="low"):
+    last=None
+    for attempt in range(2):
+        budget=tok if attempt==0 else max(tok,8000)
+        r=c.responses.create(model=MODEL,reasoning={"effort":effort},
+          input=[{"role":"user","content":[{"type":"input_text","text":prompt}]+content}],
+          text={"format":{"type":"json_schema","name":name,"strict":True,"schema":schema},"verbosity":"low"},
+          max_output_tokens=budget)
+        last=r
+        if r.status=="completed" and (r.output_text or "").strip():return json.loads(r.output_text),r
+        reason=getattr(getattr(r,"incomplete_details",None),"reason",None)
+        if attempt==0 and reason=="max_output_tokens":continue
+        raise RuntimeError(f"response {r.status}: {getattr(r,'incomplete_details',None)}")
+    raise RuntimeError(f"No usable response: {getattr(last,'status',None)}")
+def dv_crops(path):
+    im=Image.open(path).convert("RGB");w,h=im.size
+    d=Path(tempfile.gettempdir())/("hvac_dv_"+Path(path).stem);d.mkdir(exist_ok=True)
+    out=[("overview",str(path))];tw,th=int(w*.5),int(h*.5);n=0
+    for cy in (.25,.5,.75):
+        for cx in (.25,.5,.75):
+            x=max(0,min(w-tw,int(w*cx-tw/2)));y=max(0,min(h-th,int(h*cy-th/2)));n+=1
+            p=d/f"crop_{n}.jpg";im.crop((x,y,x+tw,y+th)).save(p,quality=96)
+            out.append((f"crop {n}",str(p)))
+    return out
+def deep_run(key,path,progress):
+    c=OpenAI(api_key=key,timeout=180);views=dv_crops(path);obs=[];use=[0,0]
+    for i,(label,p) in enumerate(views):
+        progress(f"Deep Vision: {label} {i+1}/10")
+        x,r=dv_ask(c,IP,[{"type":"input_image","image_url":dv_url(p),"detail":"high"}],OBS,"crop_inspection")
+        obs.append({"view":label,"observations":x})
+        try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
+        except:pass
+    progress("Deep Vision: synthesizing...")
+    x,r=dv_ask(c,SP,[{"type":"input_text","text":json.dumps(obs,separators=(",",":"))}],FINAL,"property_synthesis",6000,"medium")
+    try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
+    except:pass
+    return x,obs,use
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.8.3.1.1 — Visual Debug Control Fix");r.geometry("1600x850")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.0 — Prescreen + Deep Vision");r.geometry("1600x880")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
-        ttk.Label(t,text="Virginia Beach search center:").grid(row=0,column=0)
-        self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=40).grid(row=0,column=1,padx=5)
+        ttk.Label(t,text="Virginia Beach test center:").grid(row=0,column=0)
+        self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)
         ttk.Label(t,text="Radius mi:").grid(row=0,column=2);self.rad=tk.StringVar(value="1.0");ttk.Entry(t,textvariable=self.rad,width=6).grid(row=0,column=3)
-        ttk.Label(t,text="Size path min ft²:").grid(row=0,column=4);self.mn=tk.StringVar(value="10000");ttk.Entry(t,textvariable=self.mn,width=8).grid(row=0,column=5)
-        self.b=ttk.Button(t,text="Discover",command=self.start);self.b.grid(row=0,column=6,padx=8)
-        ttk.Label(t,text="OpenAI key:").grid(row=0,column=7)
-        self.key=tk.StringVar();ttk.Entry(t,textvariable=self.key,width=22,show="*").grid(row=0,column=8,padx=4)
-        self.st=tk.StringVar(value="Footprints: Virginia Beach city service first; Virginia CivilReference fallback automatically.")
+        ttk.Label(t,text="Size threshold ft²:").grid(row=0,column=4);self.mn=tk.StringVar(value="10000");ttk.Entry(t,textvariable=self.mn,width=8).grid(row=0,column=5)
+        self.b=ttk.Button(t,text="Discover + Prescreen",command=self.start);self.b.grid(row=0,column=6,padx=8)
+        ttk.Label(t,text="OpenAI key:").grid(row=0,column=7);self.key=tk.StringVar()
+        ttk.Entry(t,textvariable=self.key,width=22,show="*").grid(row=0,column=8,padx=4)
+        self.st=tk.StringVar(value="Non-vision prescreen first. Deep Vision only on shortlisted candidates.")
         ttk.Label(r,textvariable=self.st).pack(fill="x",padx=10)
-        cs=("rank","address","largest","total","avg","bldgs","miles","land","zone","tier","score","path","mech","vision","source")
+        cs=("rank","address","largest","avg","bldgs","miles","land","tier","pre","reason","gis","deep","dvscore","source")
         self.tree=ttk.Treeview(r,columns=cs,show="headings")
-        for c,w in zip(cs,(45,210,75,80,70,50,55,165,50,65,50,70,55,90,90)):
+        widths=(45,210,80,75,50,55,175,65,55,120,50,65,60,90)
+        for c,w in zip(cs,widths):
             self.tree.heading(c,text=c.upper());self.tree.column(c,width=w,anchor="w")
         self.tree.pack(fill="both",expand=True,padx=10,pady=8)
         f=ttk.Frame(r,padding=10);f.pack(fill="x")
         ttk.Button(f,text="Download Aerial",command=self.dl).pack(side="left")
-        ttk.Button(f,text="Save Screening Images",command=self.save_screen_images).pack(side="left",padx=8)
-        ttk.Button(f,text="Screen Selected",command=self.screen_selected).pack(side="left",padx=8)
-        ttk.Button(f,text="Screen Top 25",command=self.screen_top).pack(side="left",padx=8)
+        ttk.Button(f,text="Deep Analyze Selected",command=self.deep_selected).pack(side="left",padx=8)
+        ttk.Button(f,text="Deep Analyze Top 10",command=lambda:self.deep_batch(10)).pack(side="left",padx=8)
+        ttk.Button(f,text="Deep Analyze Top 25",command=lambda:self.deep_batch(25)).pack(side="left",padx=8)
         ttk.Button(f,text="Copy Address",command=self.copy).pack(side="left",padx=8)
+
     def start(self):
-        self.b.config(state="disabled");self.st.set("Querying parcels + building footprints (automatic fallback enabled)...")
+        self.b.config(state="disabled");self.st.set("Querying GIS and applying non-vision prescreen...")
         threading.Thread(target=self.work,daemon=True).start()
     def work(self):
         try:
-            x,y=geocode(self.q.get().strip())
-            self.rows,np,nb,nj,src,errs=discover(x,y,float(self.rad.get()),float(self.mn.get()))
+            x,y=geocode(self.q.get().strip());mn=float(self.mn.get())
+            self.rows,np,nb,nj,src,errs=discover(x,y,float(self.rad.get()),mn)
             self.diag=(np,nb,nj,src,errs);self.r.after(0,self.show)
         except Exception as e:self.r.after(0,lambda e=e:self.fail(e))
+    def rowvals(self,n,z):
+        fmt=lambda v:f"{v:,}" if v is not None else "UNKNOWN"
+        return (n,z["address"],fmt(z["largest"]),fmt(z["avg"]),z["count"],z["distance"],z["land"],z["tier"],
+                "YES" if z["pre"] else "NO",z["pre_reason"],z["score"],z.get("deep_class",""),z.get("deep_score",""),z["source"])
     def show(self):
         for i in self.tree.get_children():self.tree.delete(i)
-        for n,z in enumerate(self.rows,1):
-            fmt=lambda v:f"{v:,}" if v is not None else "UNKNOWN"
-            self.tree.insert("","end",iid=str(n-1),values=(n,z["address"],fmt(z["largest"]),fmt(z["total"]),fmt(z["avg"]),
-                z["count"],z["distance"],z["land"],z["zone"],z["tier"],z["score"],z["path"],
-                z.get("mech",""),z.get("vision",""),z["source"]))
-        sz=sum(z["path"]=="SIZE" for z in self.rows);np,nb,nj,src,errs=self.diag
-        warn=(" | fallback reason: "+errs[0][:80]) if errs and src!="VB CITY" else ""
-        self.st.set(f"{len(self.rows)} prospects — SIZE {sz}, ANOMALY {len(self.rows)-sz} | parcels {np} | footprints {nb} | joined {nj} | source {src}{warn}")
+        for n,z in enumerate(self.rows,1):self.tree.insert("","end",iid=str(n-1),values=self.rowvals(n,z))
+        pre=sum(z["pre"] for z in self.rows);np,nb,nj,src,errs=self.diag
+        warn=(" | fallback: "+errs[0][:70]) if errs and src!="VB CITY" else ""
+        self.st.set(f"{len(self.rows)} discovered | {pre} pass prescreen | parcels {np} | footprints {nb} | joined {nj} | {src}{warn}")
         self.b.config(state="normal")
     def fail(self,e):self.st.set("Failed: "+repr(e));self.b.config(state="normal")
-    def sel(self):
+    def selidx(self):
         s=self.tree.selection()
-        if not s:messagebox.showinfo("Select","Select a candidate.");return
-        return self.rows[int(s[0])]
+        if not s:messagebox.showinfo("Select","Select a candidate.");return None
+        return int(s[0])
     def dl(self):
-        z=self.sel()
-        if not z:return
-        out=Path.home()/"Downloads"/f'HVAC_{z["address"].replace(" ","_") or "candidate"}.jpg';self.st.set("Downloading aerial...")
+        i=self.selidx()
+        if i is None:return
+        z=self.rows[i];out=Path.home()/"Downloads"/f'HVAC_{z["address"].replace(" ","_") or "candidate"}.jpg'
+        self.st.set("Downloading aerial...")
         def w():
             try:aerial(z["lon"],z["lat"],z["largest"],out);self.r.after(0,lambda:self.st.set("Saved "+str(out)))
             except Exception as e:self.r.after(0,lambda:self.st.set("Download failed: "+repr(e)))
-        threading.Thread(target=w,daemon=True).start()
-    def save_screen_images(self):
-        z=self.sel()
-        if not z:return
-        safe="".join(c if c.isalnum() or c in "-_" else "_" for c in (z["address"] or "candidate"))
-        outdir=Path.home()/"Downloads"/f"HVAC_SCREEN_DEBUG_{safe}"
-        self.st.set("Generating exact screening images...")
-        def w():
-            try:
-                imgs=screen_images(z);outdir.mkdir(parents=True,exist_ok=True)
-                for n,(label,_b64,p) in enumerate(imgs,1):
-                    lname="".join(c if c.isalnum() or c in "-_" else "_" for c in label)[:70]
-                    shutil.copy2(p,outdir/f"{n:02d}_{lname}.jpg")
-                manifest=outdir/"README.txt"
-                manifest.write_text("These are the exact image files/framing generated for the GPT screening call.\\n"
-                                    "Image 01 is the same framing as Download Aerial.\\n\\n"+
-                                    "\\n".join(f"{n:02d}  {label}" for n,(label,_b64,_p) in enumerate(imgs,1)))
-                self.r.after(0,lambda:self.st.set(f"Saved {len(imgs)} exact screening images to {outdir}"))
-            except Exception as e:self.r.after(0,lambda:self.st.set("Save screening images failed: "+repr(e)))
         threading.Thread(target=w,daemon=True).start()
     def getkey(self):
         k=self.key.get().strip()
         if not k:messagebox.showinfo("OpenAI key","Paste your OpenAI API key first.");return None
         return k
-    def screen_one(self,i,k):
+    def run_deep_one(self,i,k,batchpos=None,total=None):
         z=self.rows[i]
-        try:
-            r=cheap_screen(k,z)
-            z["mech"]=int(r.get("mechanical_score",0))
-            z["vision"]=r.get("decision","")
-            z["vision_summary"]=r.get("summary","")
-            z["signals"]=r.get("signals",[])
-            z["best_view"]=r.get("best_view","");z["screen_views"]=r.get("_views",0)
-            return None
-        except Exception as e:return str(e)
-    def refresh_row(self,i):
-        z=self.rows[i];fmt=lambda v:f"{v:,}" if v is not None else "UNKNOWN"
-        self.tree.item(str(i),values=(i+1,z["address"],fmt(z["largest"]),fmt(z["total"]),fmt(z["avg"]),
-            z["count"],z["distance"],z["land"],z["zone"],z["tier"],z["score"],z["path"],
-            z.get("mech",""),z.get("vision",""),z["source"]))
-    def screen_selected(self):
-        k=self.getkey();s=self.tree.selection()
-        if not k:return
-        if not s:messagebox.showinfo("Select","Select a candidate.");return
-        i=int(s[0]);self.st.set("Cheap visual screen running for "+self.rows[i]["address"]+"...")
+        tmp=Path(tempfile.gettempdir())/f"hvac_deep_{i}_{abs(hash((z['lon'],z['lat'])))}.jpg"
+        aerial(z["lon"],z["lat"],z["largest"],tmp)
+        def prog(x):
+            prefix=f"[{batchpos}/{total}] " if batchpos else ""
+            self.r.after(0,lambda:self.st.set(prefix+x+" — "+(z["address"] or "candidate")))
+        result,obs,use=deep_run(k,tmp,prog)
+        z["deep_class"]=result["class"];z["deep_score"]=result["score"];z["deep_conf"]=result["confidence"]
+        z["deep_summary"]=result["summary"];z["deep_result"]=result;z["tokens"]=sum(use)
+    def refresh(self):
+        self.rows.sort(key=lambda z:(0 if z.get("deep_class")=="GOOD" else 1 if z.get("deep_class")=="MAYBE" else 2 if z.get("deep_class")=="POOR" else 3,
+                                     -z.get("deep_score",0),0 if z["pre"] else 1,-z["score"],-(z["largest"] or 0)))
+        for x in self.tree.get_children():self.tree.delete(x)
+        for n,z in enumerate(self.rows,1):self.tree.insert("","end",iid=str(n-1),values=self.rowvals(n,z))
+    def deep_selected(self):
+        k=self.getkey();i=self.selidx()
+        if not k or i is None:return
+        self.st.set("Starting Deep Vision...")
         def w():
-            e=self.screen_one(i,k)
-            self.r.after(0,lambda:self.after_screen(i,e))
+            try:
+                self.run_deep_one(i,k);z=self.rows[i]
+                self.r.after(0,self.refresh)
+                self.r.after(0,lambda:self.st.set(f'{z["address"]}: {z["deep_class"]} {z["deep_score"]}/100 — {z["deep_summary"]} | {z["tokens"]:,} tokens'))
+            except Exception as e:self.r.after(0,lambda e=e:self.st.set("Deep Vision failed: "+repr(e)))
         threading.Thread(target=w,daemon=True).start()
-    def after_screen(self,i,e):
-        self.refresh_row(i)
-        z=self.rows[i]
-        if e:self.st.set("Screen failed: "+e)
-        else:self.st.set(f'{z["address"]}: mechanical {z["mech"]}/100 — {z["vision"]} — {z.get("vision_summary","")} | {z.get("screen_views",0)} images | best: {z.get("best_view","")}')
-    def screen_top(self):
+    def deep_batch(self,n):
         k=self.getkey()
         if not k:return
-        # Default batch deliberately limited to 25 to control API spend.
-        ids=list(range(min(25,len(self.rows))))
-        self.st.set(f"Screening {len(ids)} candidates with building-aware views...")
+        ids=[i for i,z in enumerate(self.rows) if z["pre"] and not z.get("deep_class")][:n]
+        if not ids:messagebox.showinfo("Deep Vision","No unscreened prescreen candidates.");return
+        self.st.set(f"Deep Vision batch starting: {len(ids)} candidates...")
         def w():
-            errs=0
-            for n,i in enumerate(ids,1):
-                if self.screen_one(i,k):errs+=1
-                self.r.after(0,lambda i=i:self.refresh_row(i))
-                self.r.after(0,lambda n=n:self.st.set(f"Cheap visual screen {n}/{len(ids)}..."))
-            self.r.after(0,lambda:self.finish_batch(errs))
+            errors=0
+            for pos,i in enumerate(ids,1):
+                try:self.run_deep_one(i,k,pos,len(ids))
+                except Exception:errors+=1
+            self.r.after(0,self.refresh)
+            self.r.after(0,lambda:self.st.set(f"Deep Vision batch complete: {len(ids)-errors} analyzed, {errors} errors."))
         threading.Thread(target=w,daemon=True).start()
-    def finish_batch(self,errs):
-        # Re-rank screened candidates by mechanical score first; unscreened retain GIS score.
-        self.rows.sort(key=lambda z:(0 if "mech" in z else 1,-z.get("mech",0),-z["score"],z["distance"]))
-        for i in self.tree.get_children():self.tree.delete(i)
-        for n,z in enumerate(self.rows,1):
-            fmt=lambda v:f"{v:,}" if v is not None else "UNKNOWN"
-            self.tree.insert("","end",iid=str(n-1),values=(n,z["address"],fmt(z["largest"]),fmt(z["total"]),fmt(z["avg"]),
-                z["count"],z["distance"],z["land"],z["zone"],z["tier"],z["score"],z["path"],z.get("mech",""),z.get("vision",""),z["source"]))
-        self.st.set(f"Visual screening complete. {errs} errors. Screened candidates re-ranked by mechanical opportunity.")
     def copy(self):
-        z=self.sel()
-        if z:self.r.clipboard_clear();self.r.clipboard_append(z["address"]);self.st.set("Address copied.")
+        i=self.selidx()
+        if i is not None:
+            z=self.rows[i];self.r.clipboard_clear();self.r.clipboard_append(z["address"]);self.st.set("Address copied.")
 
 r=tk.Tk();App(r);r.mainloop()
