@@ -13,7 +13,7 @@ SCREEN_MODEL="gpt-5.4-mini"
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.8.1"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.8.2"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -168,62 +168,94 @@ def aerial(x,y,sf,out):
 def aerial_at(x,y,side_ft,pixels,out):
     h=side_ft*.3048/2;R=6378137
     X=R*math.radians(x);Y=R*math.log(math.tan(math.pi/4+math.radians(y)/2))
-    q=urllib.parse.urlencode({"f":"image","bbox":f"{X-h},{Y-h},{X+h},{Y+h}","bboxSR":"3857",
-                              "imageSR":"3857","size":f"{pixels},{pixels}","format":"jpg"})
+    q=urllib.parse.urlencode({"f":"image","bbox":f"{X-h},{Y-h},{X+h},{Y+h}",
+                              "bboxSR":"3857","imageSR":"3857","size":f"{pixels},{pixels}","format":"jpg"})
     with urllib.request.urlopen(AERIAL+"?"+q,timeout=120) as r:Path(out).write_bytes(r.read())
+
+def offset_lonlat(lon,lat,east_ft,north_ft):
+    return (lon+east_ft/(69.172*5280*max(.2,math.cos(math.radians(lat)))),
+            lat+north_ft/(69.0*5280))
 
 def screen_images(z):
     import base64,tempfile
-    td=Path(tempfile.gettempdir()); imgs=[]
+    td=Path(tempfile.gettempdir());imgs=[];tag=abs(hash((z["lon"],z["lat"])))
     overview_side=max(900,min(2200,math.sqrt(max(z.get("total") or z.get("largest") or 30000,1))*4.0))
-    p=td/f"hvac_v081_{abs(hash((z['lon'],z['lat'])))}_overview.jpg"
-    aerial_at(z["lon"],z["lat"],overview_side,1600,p)
+    p=td/f"hvac_v082_{tag}_overview.jpg";aerial_at(z["lon"],z["lat"],overview_side,1600,p)
     imgs.append(("PROPERTY OVERVIEW",base64.b64encode(p.read_bytes()).decode("ascii")))
-    bs=sorted(z.get("buildings",[]),key=lambda b:b.get("sq",0),reverse=True); chosen=[]
+
+    bs=sorted(z.get("buildings",[]),key=lambda b:b.get("sq",0),reverse=True)
+    chosen=[]
     for b in bs:
-        if any(miles(b["lon"],b["lat"],q["lon"],q["lat"])<0.025 for q in chosen):continue
+        if any(miles(b["lon"],b["lat"],q["lon"],q["lat"])<0.03 for q in chosen):continue
         chosen.append(b)
-        if len(chosen)>=4:break
-    if not chosen:
-        d=0.0016
-        chosen=[{"lon":z["lon"]-d,"lat":z["lat"],"sq":25000},{"lon":z["lon"]+d,"lat":z["lat"],"sq":25000},
-                {"lon":z["lon"],"lat":z["lat"]-d,"sq":25000},{"lon":z["lon"],"lat":z["lat"]+d,"sq":25000}]
-    for i,b in enumerate(chosen,1):
-        side=max(500,min(1050,math.sqrt(max(b.get("sq") or 25000,1))*3.0))
-        p=td/f"hvac_v081_{abs(hash((z['lon'],z['lat'])))}_b{i}.jpg"
-        aerial_at(b["lon"],b["lat"],side,1400,p)
-        imgs.append((f"BUILDING/PERIMETER VIEW {i}",base64.b64encode(p.read_bytes()).decode("ascii")))
+        if len(chosen)>=2:break
+    if not chosen:chosen=[{"lon":z["lon"],"lat":z["lat"],"sq":z.get("largest") or 30000}]
+
+    for bi,b in enumerate(chosen,1):
+        sq=max(b.get("sq") or 30000,5000);span=max(120,min(420,math.sqrt(sq)))
+        context=max(430,min(800,span*2.0))
+        p=td/f"hvac_v082_{tag}_b{bi}_center.jpg";aerial_at(b["lon"],b["lat"],context,1400,p)
+        imgs.append((f"BUILDING {bi} ROOF AND IMMEDIATE CONTEXT",base64.b64encode(p.read_bytes()).decode("ascii")))
+        off=max(90,min(260,span*.62));side=max(330,min(560,span*1.35))
+        for label,ef,nf in (("NORTH",0,off),("SOUTH",0,-off),("EAST",off,0),("WEST",-off,0)):
+            lon,lat=offset_lonlat(b["lon"],b["lat"],ef,nf)
+            p=td/f"hvac_v082_{tag}_b{bi}_{label}.jpg";aerial_at(lon,lat,side,1400,p)
+            imgs.append((f"BUILDING {bi} {label} PERIMETER",base64.b64encode(p.read_bytes()).decode("ascii")))
     return imgs
 
 def cheap_screen(api_key,z):
     imgs=screen_images(z)
-    prompt="""FAST HIGH-RECALL aerial screen for commercial HVAC sales prospecting. You have a PROPERTY OVERVIEW and close BUILDING/PERIMETER VIEWS. Inspect EVERY image and the ground immediately beside every building. Do not stop after seeing ordinary rooftop units.
+    prompt="""You are performing a HIGH-RECALL first-pass aerial screen for commercial HVAC sales prospects.
+You receive a PROPERTY OVERVIEW and targeted BUILDING/PERIMETER views.
 
-Actively search for cooling towers or tower-like heat rejection equipment; air-cooled chillers or large fan-array equipment beside walls; substantial hydronic/process piping; paired large pipes; complex purposeful piping with multiple 90-degree turns; mechanical yards/central plants; unusually large packaged HVAC; and dense complex rooftop systems.
+MANDATORY: inspect EVERY supplied image. For each building, inspect NORTH, SOUTH, EAST and WEST perimeter
+views before deciding LOW. Do not stop after noticing ordinary rooftop RTUs: valuable chillers, cooling towers,
+piping and mechanical yards are often on the ground immediately beside a wall.
 
-Critical rules: side-mounted equipment may be much more important than rooftop equipment. A small building with towers/chillers/process piping can be a great prospect. Large building size alone is not mechanical evidence. Exact chiller-vs-cooling-tower identification is not required: if substantial high-value equipment is visible but ambiguous, score the SITE highly. White insulated hydronic pipe can resemble PVC; large diameter plus multiple bends and purposeful routing into a building is meaningful. Ordinary small RTUs/condensers alone remain LOW. Prefer a false positive over missing credible central/process equipment.
+Actively search for cooling towers; air-cooled chillers or chiller-like fan arrays; substantial hydronic/process
+piping; paired large pipes; complex purposeful pipe routing; mechanical yards/central plants; unusually large
+packaged equipment; and dense/complex mechanical systems.
+
+Exact chiller-vs-cooling-tower naming is secondary. If substantial side equipment is ambiguous between those
+categories but has large scale, piping, or central-system context, score the SITE highly. White insulated
+hydronic pipe can resemble PVC; large diameter + multiple bends + purposeful building entry is meaningful.
+Small buildings can be excellent prospects. Building size alone is not evidence. Ordinary small RTUs and
+condensers alone should remain LOW.
+
+Before returning LOW, verify every supplied perimeter view was inspected and none contains credible large
+side-mounted mechanical equipment or substantial piping.
 
 Return ONLY JSON:
-{"mechanical_score":0-100,"decision":"PROMISING"|"REVIEW"|"LOW","high_value_evidence":true|false,"best_view":"overview or building/perimeter view number","signals":["short visible signal"],"summary":"one concise sentence"}
-80-100 strong central/process/large mechanical evidence; 60-79 credible promising evidence; 40-59 ambiguous/review; 0-39 ordinary/light mechanical evidence."""
+{"mechanical_score":0-100,"decision":"PROMISING"|"REVIEW"|"LOW","high_value_evidence":true|false,
+"best_view":"exact supplied view label","perimeter_checked":true,
+"signals":["short visible signal",...],"summary":"one concise sentence"}
+
+80-100 strong central/process/large mechanical evidence
+60-79 credible promising evidence
+40-59 ambiguous/review
+0-39 ordinary/light mechanical evidence
+"""
     content=[{"type":"input_text","text":prompt}]
     for label,b64 in imgs:
         content += [{"type":"input_text","text":label},{"type":"input_image","image_url":"data:image/jpeg;base64,"+b64}]
-    body={"model":SCREEN_MODEL,"reasoning":{"effort":"low"},"max_output_tokens":850,"input":[{"role":"user","content":content}]}
-    req=urllib.request.Request(OPENAI_URL,data=json.dumps(body).encode(),headers={"Authorization":"Bearer "+api_key,"Content-Type":"application/json"})
-    with urllib.request.urlopen(req,timeout=240) as r:d=json.loads(r.read().decode())
+    body={"model":SCREEN_MODEL,"reasoning":{"effort":"low"},"max_output_tokens":950,
+          "input":[{"role":"user","content":content}]}
+    req=urllib.request.Request(OPENAI_URL,data=json.dumps(body).encode(),
+        headers={"Authorization":"Bearer "+api_key,"Content-Type":"application/json"})
+    with urllib.request.urlopen(req,timeout=300) as r:d=json.loads(r.read().decode())
     text=""
     for o in d.get("output",[]):
         for c in o.get("content",[]):
             if c.get("type")=="output_text":text+=c.get("text","")
     text=text.strip()
-    if text.startswith("```"):text=text.split("\\n",1)[1].rsplit("```",1)[0].strip()
-    ans=json.loads(text);ans["_views"]=len(imgs);return ans
+    if text.startswith("```"):text=text.split("\n",1)[1].rsplit("```",1)[0].strip()
+    ans=json.loads(text);ans["_views"]=len(imgs)
+    return ans
 
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.8.1 — Building-Aware Mechanical Screen");r.geometry("1600x850")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.8.2 — Perimeter Mechanical Screen");r.geometry("1600x850")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach search center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=40).grid(row=0,column=1,padx=5)
