@@ -13,7 +13,7 @@ SCREEN_MODEL="gpt-5.4-mini"
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.8.0"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.8.1"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -144,7 +144,7 @@ def discover(x,y,mi,mn):
         residential=any(k in land for k in ("SINGLE FAMILY","DUPLEX","MULTI FAMILY","MULTIFAMILY","APART","CONDO"))
         anomaly_eligible=not residential
         if not sizepass and not anomaly_eligible:continue
-        p.update(largest=largest,total=total,count=count,avg=avg,fcodes=fcodes,
+        p.update(largest=largest,total=total,count=count,avg=avg,fcodes=fcodes,buildings=bl,
                  distance=round(miles(x,y,p["lon"],p["lat"]),2))
         p["tier"],p["score"]=classify(p["land"],p["zone"],largest,avg,count,fcodes)
         p["path"]="SIZE" if sizepass else "ANOMALY"
@@ -165,68 +165,65 @@ def aerial(x,y,sf,out):
                               "imageSR":"3857","size":"1800,1800","format":"jpg"})
     with urllib.request.urlopen(AERIAL+"?"+q,timeout=120) as r:Path(out).write_bytes(r.read())
 
-def image_b64_for_property(z):
+def aerial_at(x,y,side_ft,pixels,out):
+    h=side_ft*.3048/2;R=6378137
+    X=R*math.radians(x);Y=R*math.log(math.tan(math.pi/4+math.radians(y)/2))
+    q=urllib.parse.urlencode({"f":"image","bbox":f"{X-h},{Y-h},{X+h},{Y+h}","bboxSR":"3857",
+                              "imageSR":"3857","size":f"{pixels},{pixels}","format":"jpg"})
+    with urllib.request.urlopen(AERIAL+"?"+q,timeout=120) as r:Path(out).write_bytes(r.read())
+
+def screen_images(z):
     import base64,tempfile
-    p=Path(tempfile.gettempdir())/f"hvac_screen_{abs(hash((z['lon'],z['lat'])))}.jpg"
-    aerial(z["lon"],z["lat"],z["largest"],p)
-    return base64.b64encode(p.read_bytes()).decode("ascii")
+    td=Path(tempfile.gettempdir()); imgs=[]
+    overview_side=max(900,min(2200,math.sqrt(max(z.get("total") or z.get("largest") or 30000,1))*4.0))
+    p=td/f"hvac_v081_{abs(hash((z['lon'],z['lat'])))}_overview.jpg"
+    aerial_at(z["lon"],z["lat"],overview_side,1600,p)
+    imgs.append(("PROPERTY OVERVIEW",base64.b64encode(p.read_bytes()).decode("ascii")))
+    bs=sorted(z.get("buildings",[]),key=lambda b:b.get("sq",0),reverse=True); chosen=[]
+    for b in bs:
+        if any(miles(b["lon"],b["lat"],q["lon"],q["lat"])<0.025 for q in chosen):continue
+        chosen.append(b)
+        if len(chosen)>=4:break
+    if not chosen:
+        d=0.0016
+        chosen=[{"lon":z["lon"]-d,"lat":z["lat"],"sq":25000},{"lon":z["lon"]+d,"lat":z["lat"],"sq":25000},
+                {"lon":z["lon"],"lat":z["lat"]-d,"sq":25000},{"lon":z["lon"],"lat":z["lat"]+d,"sq":25000}]
+    for i,b in enumerate(chosen,1):
+        side=max(500,min(1050,math.sqrt(max(b.get("sq") or 25000,1))*3.0))
+        p=td/f"hvac_v081_{abs(hash((z['lon'],z['lat'])))}_b{i}.jpg"
+        aerial_at(b["lon"],b["lat"],side,1400,p)
+        imgs.append((f"BUILDING/PERIMETER VIEW {i}",base64.b64encode(p.read_bytes()).decode("ascii")))
+    return imgs
 
 def cheap_screen(api_key,z):
-    import base64
-    b64=image_b64_for_property(z)
-    prompt="""You are doing a FAST FIRST-PASS aerial screen for commercial HVAC sales prospecting.
-Do NOT attempt a detailed equipment inventory. The goal is high recall for unusually valuable mechanical opportunities.
+    imgs=screen_images(z)
+    prompt="""FAST HIGH-RECALL aerial screen for commercial HVAC sales prospecting. You have a PROPERTY OVERVIEW and close BUILDING/PERIMETER VIEWS. Inspect EVERY image and the ground immediately beside every building. Do not stop after seeing ordinary rooftop units.
 
-Look for visible evidence of:
-- cooling towers or tower-like heat rejection equipment
-- air-cooled chillers or chiller-like large fan equipment
-- substantial hydronic/process piping, especially paired large pipes, complex routing, multiple 90-degree turns, or equipment-to-building connections
-- mechanical yards / central plant infrastructure
-- unusually large packaged rooftop HVAC
-- dense or complex rooftop mechanical systems
+Actively search for cooling towers or tower-like heat rejection equipment; air-cooled chillers or large fan-array equipment beside walls; substantial hydronic/process piping; paired large pipes; complex purposeful piping with multiple 90-degree turns; mechanical yards/central plants; unusually large packaged HVAC; and dense complex rooftop systems.
 
-Important:
-- A small building can be an excellent prospect if it has central/process cooling equipment.
-- Large building size alone is NOT evidence of mechanical opportunity.
-- Ordinary small RTUs/condensers should not score highly by themselves.
-- Grocery/retail refrigeration can resemble HVAC; flag ambiguity rather than confidently calling it central HVAC.
-- Exact chiller-vs-cooling-tower identification is NOT required at this stage.
-- Prefer false positives over missing credible central/process mechanical equipment.
+Critical rules: side-mounted equipment may be much more important than rooftop equipment. A small building with towers/chillers/process piping can be a great prospect. Large building size alone is not mechanical evidence. Exact chiller-vs-cooling-tower identification is not required: if substantial high-value equipment is visible but ambiguous, score the SITE highly. White insulated hydronic pipe can resemble PVC; large diameter plus multiple bends and purposeful routing into a building is meaningful. Ordinary small RTUs/condensers alone remain LOW. Prefer a false positive over missing credible central/process equipment.
 
-Return ONLY JSON with:
-{"mechanical_score":0-100,"decision":"PROMISING"|"REVIEW"|"LOW","high_value_evidence":true|false,
-"signals":["short visible signal",...],"summary":"one concise sentence"}
-Scoring guide:
-80-100 strong visible central/process/large mechanical evidence
-60-79 credible promising evidence
-40-59 ambiguous/review
-0-39 ordinary/light mechanical evidence
-"""
-    body={
-      "model":SCREEN_MODEL,
-      "reasoning":{"effort":"low"},
-      "max_output_tokens":700,
-      "input":[{"role":"user","content":[
-        {"type":"input_text","text":prompt},
-        {"type":"input_image","image_url":"data:image/jpeg;base64,"+b64}
-      ]}]
-    }
-    req=urllib.request.Request(OPENAI_URL,data=json.dumps(body).encode(),
-        headers={"Authorization":"Bearer "+api_key,"Content-Type":"application/json"})
-    with urllib.request.urlopen(req,timeout=180) as r:d=json.loads(r.read().decode())
+Return ONLY JSON:
+{"mechanical_score":0-100,"decision":"PROMISING"|"REVIEW"|"LOW","high_value_evidence":true|false,"best_view":"overview or building/perimeter view number","signals":["short visible signal"],"summary":"one concise sentence"}
+80-100 strong central/process/large mechanical evidence; 60-79 credible promising evidence; 40-59 ambiguous/review; 0-39 ordinary/light mechanical evidence."""
+    content=[{"type":"input_text","text":prompt}]
+    for label,b64 in imgs:
+        content += [{"type":"input_text","text":label},{"type":"input_image","image_url":"data:image/jpeg;base64,"+b64}]
+    body={"model":SCREEN_MODEL,"reasoning":{"effort":"low"},"max_output_tokens":850,"input":[{"role":"user","content":content}]}
+    req=urllib.request.Request(OPENAI_URL,data=json.dumps(body).encode(),headers={"Authorization":"Bearer "+api_key,"Content-Type":"application/json"})
+    with urllib.request.urlopen(req,timeout=240) as r:d=json.loads(r.read().decode())
     text=""
     for o in d.get("output",[]):
         for c in o.get("content",[]):
             if c.get("type")=="output_text":text+=c.get("text","")
     text=text.strip()
-    if text.startswith("```"):
-        text=text.split("\n",1)[1].rsplit("```",1)[0].strip()
-    return json.loads(text)
+    if text.startswith("```"):text=text.split("\\n",1)[1].rsplit("```",1)[0].strip()
+    ans=json.loads(text);ans["_views"]=len(imgs);return ans
 
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.8.0 — Cheap Mechanical Vision Screen");r.geometry("1600x850")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.8.1 — Building-Aware Mechanical Screen");r.geometry("1600x850")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach search center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=40).grid(row=0,column=1,padx=5)
@@ -292,6 +289,7 @@ class App:
             z["vision"]=r.get("decision","")
             z["vision_summary"]=r.get("summary","")
             z["signals"]=r.get("signals",[])
+            z["best_view"]=r.get("best_view","");z["screen_views"]=r.get("_views",0)
             return None
         except Exception as e:return str(e)
     def refresh_row(self,i):
@@ -312,13 +310,13 @@ class App:
         self.refresh_row(i)
         z=self.rows[i]
         if e:self.st.set("Screen failed: "+e)
-        else:self.st.set(f'{z["address"]}: mechanical {z["mech"]}/100 — {z["vision"]} — {z.get("vision_summary","")}')
+        else:self.st.set(f'{z["address"]}: mechanical {z["mech"]}/100 — {z["vision"]} — {z.get("vision_summary","")} | {z.get("screen_views",0)} images | best: {z.get("best_view","")}')
     def screen_top(self):
         k=self.getkey()
         if not k:return
         # Default batch deliberately limited to 25 to control API spend.
         ids=list(range(min(25,len(self.rows))))
-        self.st.set(f"Screening {len(ids)} candidates one image each...")
+        self.st.set(f"Screening {len(ids)} candidates with building-aware views...")
         def w():
             errs=0
             for n,i in enumerate(ids,1):

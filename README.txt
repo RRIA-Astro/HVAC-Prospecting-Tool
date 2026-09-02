@@ -1,31 +1,14 @@
-HVAC Territory Discovery v0.8.0
+HVAC Territory Discovery v0.8.1
 
-MAJOR MILESTONE: Cheap Mechanical Vision Screen
+Building-aware mechanical screen.
 
-Adds:
-- One-image, one-call GPT-5.4-mini first-pass aerial screening.
-- Low reasoning and 700 max output tokens to keep screening much cheaper than v0.6.6 Deep Vision.
-- Screen Selected button for controlled regression testing.
-- Screen Top 25 button; intentionally capped at 25 per click to control API spend.
-- Mechanical score 0-100 and PROMISING / REVIEW / LOW result columns.
-- Screened candidates are re-ranked by mechanical opportunity.
-- Prompt emphasizes high recall for cooling towers, chillers/chiller-like equipment, substantial piping,
-  mechanical yards, large packaged equipment and complex rooftop systems.
-- Small buildings are explicitly allowed to score highly.
-- Large building size alone is explicitly NOT mechanical evidence.
-- Exact chiller-vs-tower identification is not required.
-- GIS fallback architecture from v0.7.6 retained.
-- API key is entered at runtime and is not saved to disk.
+One API call per property now includes a property overview plus up to four close aerial views centered on the largest distinct building footprints, with generous perimeter context. This directly targets the v0.8.0 false negatives at 912 Birdneck, 717 General Booth, and 949 Birdneck, where important chillers/cooling towers sit beside buildings.
 
-FIRST TEST RECOMMENDATION:
-Do NOT Screen Top 25 initially.
-1. Discover around 717 General Booth.
-2. Screen Selected on known cases individually:
-   - 717 General Booth (should PROMISING)
-   - 912 Birdneck (should PROMISING)
-   - a known poor/ordinary property (should LOW or REVIEW)
-   - Bell Avenue candidate if visible in search (important small-building anomaly test)
-3. Only after those look reasonable, try Screen Top 25.
+Regression before batch use:
+- 912 Birdneck: should materially exceed 22 and preferably PROMISING
+- 717 General Booth: should materially exceed 58 and preferably PROMISING
+- 949 Birdneck: should notice high-value side equipment
+- 1008 Bells: should remain LOW
+- 589 Birdneck: should remain LOW
 
-This is intentionally a screening model, not detailed equipment inventory.
-v0.6.6 Deep Vision remains the intended later-stage analyzer for promising/ambiguous properties.
+Do not Screen Top 25 until those five discriminate acceptably.
