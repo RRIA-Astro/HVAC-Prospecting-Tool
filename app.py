@@ -11,7 +11,7 @@ AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/Ima
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.1"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.2"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -279,8 +279,18 @@ CONNECTION-TRACING RULES:
 - White pipe is NOT automatically PVC. Color is not diagnostic.
 - Small simple PVC condensate drainage remains positive evidence for packaged DX and against a water chiller interpretation.
 - Trace credible piping in BOTH directions and reconsider ambiguous equipment based on what the piping connects.
-- Search for conventional cooling towers plus low-profile/screened towers, closed-circuit fluid coolers, evaporative condensers,
-  induced-draft heat rejection, and atypical process chillers.
+- Search for conventional cooling towers plus SMALL SINGLE-CELL cooling towers, low-profile/screened towers,
+  closed-circuit fluid coolers, evaporative condensers, induced-draft heat rejection, and atypical process chillers.
+- A small single-cell cooling tower / fluid cooler may appear from above as a compact square or rectangular outdoor enclosure
+  with ONE large axial top fan. Look for louvered/air-intake side structure, a fan opening/shroud, equipment base/enclosure,
+  and placement immediately beside a building or process area.
+- IMPORTANT: cooling-tower piping may disappear underground almost immediately or enter the building below grade. Lack of
+  long visible above-ground piping does NOT rule out a cooling tower or evaporative heat-rejection device.
+- Credible cooling-tower / evaporative heat-rejection morphology is independently high-value prospecting evidence. Do NOT
+  require visible valves, pumps, long hydronic pipe runs, or a separately visible chiller before treating it as important.
+- When a compact one-fan outdoor structure could reasonably be a cooling tower/fluid cooler, explicitly compare that
+  interpretation against ordinary exhaust fan, rooftop unit, condenser, dumpster/enclosure, or other non-HVAC alternatives.
+  If tower/fluid-cooler morphology is credible, report at least POSSIBLE/PROBABLE rather than dismissing it solely for weak piping visibility.
 - Mechanical complexity alone does not establish a central plant.
 - Large-tonnage packaged RTUs can still make a property worthwhile, but numerous small RTUs alone are weak.
 - Never treat not_observed in one crop as proof of absence. Use quantity bands rather than exact counts.
@@ -295,9 +305,14 @@ substantial diameter + paired runs + multiple purposeful 90-degree turns + build
 can establish strong hydronic/process evidence even without visible valves/flanges. Valves may be indoors.
 White pipe is not automatically PVC. Small simple drain routing is DX evidence.
 If credible piping exists, trace its reported endpoints and reconsider connected equipment, including atypical process chillers
-and nonstandard heat rejection. Do not invent a central plant merely from many RTUs.
+and nonstandard heat rejection. However, do NOT require visible piping to validate credible cooling-tower morphology: tower piping
+can enter the ground or building almost immediately.
+A compact single-cell tower/fluid cooler with one large top axial fan, plausible louvered/air-intake enclosure, and appropriate
+ground-level placement beside a building is itself important evidence. If multiple crops support that morphology, a building may
+be GOOD even when the associated piping is buried or visually obscure.
+Do not invent a central plant merely from many RTUs.
 Favor recall for prospecting: false negatives on major central/process equipment are worse than small RTU count errors or
-chiller-vs-tower ambiguity. Exact tower-vs-chiller identity is less important than correctly flagging the property as worth pursuing."""
+chiller-vs-tower ambiguity. Exact tower-vs-chiller/fluid-cooler identity is less important than correctly flagging the property as worth pursuing."""
 
 def dv_url(p):
     return "data:image/jpeg;base64,"+base64.b64encode(Path(p).read_bytes()).decode()
@@ -340,7 +355,13 @@ def deep_run_building(c,path,label,progress):
     return x,obs,use
 
 CAMPUS_FINAL={"type":"object","additionalProperties":False,"properties":{"class":{"type":"string","enum":["GOOD","MAYBE","POOR"]},"score":{"type":"integer"},"confidence":{"type":"integer"},"best_building":{"type":"integer"},"high_value_buildings":{"type":"array","items":{"type":"integer"}},"key_evidence":{"type":"string"},"summary":{"type":"string"}},"required":["class","score","confidence","best_building","high_value_buildings","key_evidence","summary"]}
-CAMPUS_PROMPT="""Synthesize building-level commercial HVAC inspections for ONE campus/property. The sales opportunity is the CAMPUS, not the mailing-address building. A single process/utility building with credible cooling towers, chillers, substantial hydronic/process piping, mechanical yard, or unusually large equipment can make the entire campus GOOD even when an office/admin building is ordinary. Favor recall. Do not average away a strong building because other buildings are poor. Building 0 is campus-overview context and is not a physical building; use it as supporting evidence only. Return the physical building number(s) carrying the strongest opportunity when identifiable."""
+CAMPUS_PROMPT="""Synthesize building-level commercial HVAC inspections for ONE campus/property. The sales opportunity is the CAMPUS, not the mailing-address building.
+Use an OPPORTUNITY/MAXIMUM philosophy, not an average: one building with credible high-value mechanical equipment can make the entire campus GOOD even when every other building is ordinary.
+Credible cooling-tower / fluid-cooler / evaporative heat-rejection evidence BY ITSELF is a strong sales signal and does not require separately visible chillers, pumps, or long piping. Piping may go underground immediately.
+Likewise, credible chillers, substantial hydronic/process piping, mechanical yards, or unusually large equipment can independently make the campus valuable.
+Do not average away a strong process/utility building because office/admin/support buildings are poor.
+Building 0 is campus-overview context and is not a physical building; use it as supporting evidence only.
+Return the physical building number(s) carrying the strongest opportunity when identifiable. Favor recall for high-value equipment."""
 
 def deep_run_campus(key,z,root,progress):
     c=OpenAI(api_key=key,timeout=240);imgs=campus_images(z,root);results=[];use=[0,0];errors=[]
@@ -366,7 +387,7 @@ def deep_run_campus(key,z,root,progress):
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.1 — Campus-Aware Deep Vision");r.geometry("1600x880")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.2 — Cooling-Tower Recognition");r.geometry("1600x880")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach test center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)
