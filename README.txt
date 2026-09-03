@@ -1,41 +1,31 @@
-HVAC Territory Discovery v0.9.0
+HVAC Territory Discovery v0.9.1 — Campus-Aware Deep Vision
 
-ARCHITECTURE
-GIS/property/building data -> non-vision prescreen -> Deep Vision -> ranked leads.
+WHAT CHANGED
+- Campus/property is now the opportunity unit, not the mailing-address building.
+- Discovery retains all joined building footprints for each parcel.
+- New INSPECT column shows how many meaningful buildings will receive Deep Vision.
+- Up to 6 meaningful buildings per property are inspected, largest first; tiny accessory structures are skipped.
+- Each inspected building gets its own high-resolution aerial centered on that footprint with perimeter context.
+- Each building then receives the proven v0.6.6-style 10-view + synthesis analysis (11 calls/building).
+- One additional low-cost campus-overview vision call provides context for detached equipment and inter-building infrastructure.
+- Final campus synthesis does NOT average away a strong process building: one strong building can make the campus GOOD.
+- New Save Campus Images button saves the campus overview plus every exact building-centered source aerial before API analysis.
+- FACILITY column adds best-effort nearby facility/business names from OpenStreetMap/Overpass. Blank or imperfect names are possible; address/GIS remains authoritative for geometry.
+- Batch failures are now written to Downloads/HVAC_v091_batch_errors.txt instead of being silently counted.
 
-The unreliable v0.8 cheap one-call vision screen has been removed.
+IMPORTANT COST NOTE
+Campus-aware analysis can use substantially more API calls than v0.9.0 on multi-building properties.
+Example: 6 inspected buildings = about 67 calls (6 x 11 building calls + 1 campus overview context), plus final campus synthesis.
+Use Deep Analyze Selected while validating 949 Birdneck before running a large batch.
 
-NON-VISION PRESCREEN
-- Residential / apartment / condo / duplex properties are rejected.
-- Many-small-building morphology is penalized to reduce townhome/campus false positives.
-- Large buildings advance by size.
-- Smaller priority properties can advance through PRIORITY EXCEPTION:
-  hospital/medical, university/college, industrial/manufacturing, utilities,
-  government/public, schools, military, warehouse/distribution.
-- Missing-footprint parcels remain visible but do not automatically consume Deep Vision budget.
-- Building size is a signal, not an absolute rule.
+FIRST REGRESSION TEST — 949 BIRDNECK
+1. Discover + Prescreen around 717 General Booth.
+2. Select 949 Birdneck.
+3. Check BLDGS and INSPECT. The app should no longer inspect only the address-centered fire station.
+4. Click Save Campus Images BEFORE spending API credits.
+5. Confirm one of the Bxx images centers the lower-right building where the cooling tower is visible.
+6. Then Deep Analyze Selected.
+7. The campus result should be allowed to become GOOD even if the fire-station building itself is POOR.
 
-DEEP VISION
-- Integrated 10-view + synthesis architecture (11 calls/property).
-- GPT-5.4-mini.
-- Connection-tracing rules from the successful v0.6.6 development:
-  hydronic/process evidence is weighted; visible valves/flanges are not mandatory;
-  large diameter + paired/complex routing + building termination matters;
-  white pipe is not automatically PVC;
-  exact chiller-vs-tower identity is secondary to correctly flagging the prospect.
-- Buttons: Deep Analyze Selected, Top 10, Top 25.
-- Batch only analyzes candidates marked PRE=YES.
-- Completed Deep Vision results rerank GOOD -> MAYBE -> POOR.
-
-FIRST TEST
-Use 717 General Booth / 1 mile / 10,000 ft².
-Before running a batch, inspect the PRE=YES shortlist.
-Important checks:
-- 912 Birdneck should pass prescreen and Deep Vision should return GOOD.
-- 717 General Booth should pass and return GOOD.
-- 949 Birdneck should pass because it is Public/Semi Public even though parcel/building association remains imperfect.
-- Bell Avenue small military/institutional candidates with footprints >=2,500 ft² should survive via PRIORITY EXCEPTION.
-- Residential/townhome-like properties should be pushed out before vision.
-
-NOTE
-Virginia Beach remains the regression/test data source in v0.9.0. Geographic generalization is a later architecture step.
+SECOND REGRESSION TEST — 912 BIRDNECK
+Save Campus Images and confirm the building image includes the side-mounted chiller and perimeter at useful resolution, then run Deep Analyze Selected.

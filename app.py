@@ -1,4 +1,4 @@
-import base64,json,math,threading,tkinter as tk,urllib.parse,urllib.request,tempfile
+import base64,json,math,threading,tkinter as tk,urllib.parse,urllib.request,tempfile,time,shutil
 from tkinter import ttk,messagebox
 from pathlib import Path
 
@@ -11,7 +11,7 @@ AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/Ima
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.0"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.1"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -111,6 +111,33 @@ def load_buildings(x,y,mi):
         errors.append("VA CIVILREF: "+str(e))
     return [],"NONE",errors
 
+def load_osm_names(x,y,mi):
+    a,b,c,d=bbox(x,y,mi)
+    query=f'[out:json][timeout:25];(nwr["name"]({b},{a},{d},{c}););out center tags;'
+    try:data=gj("https://overpass-api.de/api/interpreter",{"data":query})
+    except Exception:return []
+    out=[]
+    for e in data.get("elements",[]):
+        t=e.get("tags",{});name=(t.get("name") or "").strip()
+        if not name:continue
+        lon=e.get("lon");lat=e.get("lat")
+        if lon is None or lat is None:
+            ce=e.get("center") or {};lon=ce.get("lon");lat=ce.get("lat")
+        if lon is None or lat is None:continue
+        kind=t.get("amenity") or t.get("office") or t.get("shop") or t.get("industrial") or t.get("building") or t.get("man_made") or ""
+        out.append({"name":name,"lon":float(lon),"lat":float(lat),"kind":kind})
+    return out
+
+def assign_facility_names(ps,names):
+    for p in ps:
+        inside=[n for n in names if pinpoly(n["lon"],n["lat"],p["rings"])]
+        if inside:
+            inside.sort(key=lambda n:(0 if n["kind"] else 1,miles(p["lon"],p["lat"],n["lon"],n["lat"])))
+            p["facility"]=inside[0]["name"]
+        else:
+            near=sorted(names,key=lambda n:miles(p["lon"],p["lat"],n["lon"],n["lat"]))
+            p["facility"]=near[0]["name"] if near and miles(p["lon"],p["lat"],near[0]["lon"],near[0]["lat"])<=0.04 else ""
+
 def classify(land,zone,largest,avg,count,fcodes):
     s=(land+" "+zone+" "+" ".join(fcodes)).upper()
     very_high=("HOSP","MEDICAL","UNIVERS","COLLEGE","INDUSTR","MANUFACTUR","UTILITY","PUMP STATION","SUBSTATION")
@@ -156,7 +183,7 @@ def prescreen(p,mn):
     return False,"FILTERED"
 
 def discover(x,y,mi,mn):
-    ps=load_parcels(x,y,mi);bs,bsource,berrors=load_buildings(x,y,mi)
+    ps=load_parcels(x,y,mi);assign_facility_names(ps,load_osm_names(x,y,mi));bs,bsource,berrors=load_buildings(x,y,mi)
     joined=0
     for b in bs:
         hits=[p for p in ps if pinpoly(b["lon"],b["lat"],p["rings"])]
@@ -191,6 +218,34 @@ def aerial(x,y,sf,out):
                               "imageSR":"3857","size":"1800,1800","format":"jpg"})
     with urllib.request.urlopen(AERIAL+"?"+q,timeout=120) as r:Path(out).write_bytes(r.read())
 
+
+def aerial_side(x,y,side_ft,out,pixels=1800):
+    side=max(250,min(2400,float(side_ft)));h=side*.3048/2;R=6378137
+    X=R*math.radians(x);Y=R*math.log(math.tan(math.pi/4+math.radians(y)/2))
+    q=urllib.parse.urlencode({"f":"image","bbox":f"{X-h},{Y-h},{X+h},{Y+h}","bboxSR":"3857","imageSR":"3857","size":f"{pixels},{pixels}","format":"jpg"})
+    with urllib.request.urlopen(AERIAL+"?"+q,timeout=120) as r:Path(out).write_bytes(r.read())
+
+def meaningful_buildings(z,maxn=6):
+    bs=sorted(z.get("buildings",[]),key=lambda b:b.get("sq",0),reverse=True)
+    if not bs:return []
+    floor=max(1800,min(6000,(z.get("largest") or 6000)*0.04))
+    keep=[b for b in bs if b.get("sq",0)>=floor]
+    if len(keep)<min(2,len(bs)):keep=bs[:min(2,len(bs))]
+    return keep[:maxn]
+
+def campus_images(z,root):
+    root=Path(root);root.mkdir(parents=True,exist_ok=True);bs=meaningful_buildings(z);paths=[]
+    if bs:
+        lon=sum(b["lon"] for b in bs)/len(bs);lat=sum(b["lat"] for b in bs)/len(bs)
+        span=max([math.hypot((b["lon"]-lon)*69.172*math.cos(math.radians(lat)),(b["lat"]-lat)*69)*5280 for b in bs]+[0])
+        side=max(700,min(2400,span*2.6+350))
+    else:lon,lat,side=z["lon"],z["lat"],max(700,math.sqrt(max(z.get("largest") or 30000,1))*3.2)
+    q=root/"00_CAMPUS_OVERVIEW.jpg";aerial_side(lon,lat,side,q);paths.append(("CAMPUS OVERVIEW",str(q),None))
+    for i,b in enumerate(bs,1):
+        side=max(420,min(1100,math.sqrt(max(b.get("sq") or 3000,1))*3.4))
+        q=root/f"B{i:02d}_{int(b.get('sq',0))}sf.jpg";aerial_side(b["lon"],b["lat"],side,q)
+        paths.append((f"BUILDING {i} — {int(b.get('sq',0)):,} ft2",str(q),b))
+    return paths
 
 # ---------------- Deep Vision v0.6.6 Connection Tracing engine ----------------
 from PIL import Image
@@ -270,23 +325,48 @@ def dv_crops(path):
             p=d/f"crop_{n}.jpg";im.crop((x,y,x+tw,y+th)).save(p,quality=96)
             out.append((f"crop {n}",str(p)))
     return out
-def deep_run(key,path,progress):
-    c=OpenAI(api_key=key,timeout=180);views=dv_crops(path);obs=[];use=[0,0]
-    for i,(label,p) in enumerate(views):
-        progress(f"Deep Vision: {label} {i+1}/10")
+def deep_run_building(c,path,label,progress):
+    views=dv_crops(path);obs=[];use=[0,0]
+    for i,(vlabel,p) in enumerate(views):
+        progress(f"{label}: {vlabel} {i+1}/10")
         x,r=dv_ask(c,IP,[{"type":"input_image","image_url":dv_url(p),"detail":"high"}],OBS,"crop_inspection")
-        obs.append({"view":label,"observations":x})
+        obs.append({"view":vlabel,"observations":x})
         try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
         except:pass
-    progress("Deep Vision: synthesizing...")
+    progress(f"{label}: synthesizing")
     x,r=dv_ask(c,SP,[{"type":"input_text","text":json.dumps(obs,separators=(",",":"))}],FINAL,"property_synthesis",6000,"medium")
     try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
     except:pass
     return x,obs,use
 
+CAMPUS_FINAL={"type":"object","additionalProperties":False,"properties":{"class":{"type":"string","enum":["GOOD","MAYBE","POOR"]},"score":{"type":"integer"},"confidence":{"type":"integer"},"best_building":{"type":"integer"},"high_value_buildings":{"type":"array","items":{"type":"integer"}},"key_evidence":{"type":"string"},"summary":{"type":"string"}},"required":["class","score","confidence","best_building","high_value_buildings","key_evidence","summary"]}
+CAMPUS_PROMPT="""Synthesize building-level commercial HVAC inspections for ONE campus/property. The sales opportunity is the CAMPUS, not the mailing-address building. A single process/utility building with credible cooling towers, chillers, substantial hydronic/process piping, mechanical yard, or unusually large equipment can make the entire campus GOOD even when an office/admin building is ordinary. Favor recall. Do not average away a strong building because other buildings are poor. Building 0 is campus-overview context and is not a physical building; use it as supporting evidence only. Return the physical building number(s) carrying the strongest opportunity when identifiable."""
+
+def deep_run_campus(key,z,root,progress):
+    c=OpenAI(api_key=key,timeout=240);imgs=campus_images(z,root);results=[];use=[0,0];errors=[]
+    # One inexpensive campus-wide context call helps catch detached mechanical equipment / inter-building infrastructure.
+    try:
+        progress("Campus overview context...")
+        ov,r=dv_ask(c,IP,[{"type":"input_image","image_url":dv_url(imgs[0][1]),"detail":"high"}],OBS,"campus_overview")
+        results.append({"building":0,"sqft":None,"result":{"class":"MAYBE","score":50,"confidence":50,"cooling_towers":json.dumps(ov["cooling_towers"]),"air_cooled_chillers":json.dumps(ov["air_cooled_chillers"]),"large_packaged_hvac":json.dumps(ov["large_packaged_hvac"]),"small_packaged_hvac":json.dumps(ov["small_packaged_hvac"]),"piping":json.dumps(ov["piping"]),"central_system_evidence":json.dumps(ov["mechanical_yard"]),"ambiguities":[],"summary":"Campus overview context only."}})
+        try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
+        except:pass
+    except Exception as e:errors.append(f"Campus overview: {type(e).__name__}: {e}")
+    for n,(label,path,b) in enumerate(imgs[1:],1):
+        try:
+            r,obs,u=deep_run_building(c,path,f"Building {n}/{len(imgs)-1}",progress)
+            results.append({"building":n,"sqft":b.get("sq"),"result":r});use[0]+=u[0];use[1]+=u[1]
+        except Exception as e:errors.append(f"Building {n}: {type(e).__name__}: {e}")
+    if not results:raise RuntimeError("All building analyses failed: "+" | ".join(errors))
+    progress("Campus synthesis...")
+    final,r=dv_ask(c,CAMPUS_PROMPT,[{"type":"input_text","text":json.dumps(results,separators=(",",":"))}],CAMPUS_FINAL,"campus_synthesis",5000,"medium")
+    try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
+    except:pass
+    return final,results,use,errors,imgs
+
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.0 — Prescreen + Deep Vision");r.geometry("1600x880")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.1 — Campus-Aware Deep Vision");r.geometry("1600x880")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach test center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)
@@ -297,14 +377,15 @@ class App:
         ttk.Entry(t,textvariable=self.key,width=22,show="*").grid(row=0,column=8,padx=4)
         self.st=tk.StringVar(value="Non-vision prescreen first. Deep Vision only on shortlisted candidates.")
         ttk.Label(r,textvariable=self.st).pack(fill="x",padx=10)
-        cs=("rank","address","largest","avg","bldgs","miles","land","tier","pre","reason","gis","deep","dvscore","source")
+        cs=("rank","facility","address","largest","avg","bldgs","inspect","miles","land","tier","pre","reason","gis","deep","dvscore","source")
         self.tree=ttk.Treeview(r,columns=cs,show="headings")
-        widths=(45,210,80,75,50,55,175,65,55,120,50,65,60,90)
+        widths=(45,210,190,80,75,50,55,55,160,65,55,120,50,65,60,90)
         for c,w in zip(cs,widths):
             self.tree.heading(c,text=c.upper());self.tree.column(c,width=w,anchor="w")
         self.tree.pack(fill="both",expand=True,padx=10,pady=8)
         f=ttk.Frame(r,padding=10);f.pack(fill="x")
         ttk.Button(f,text="Download Aerial",command=self.dl).pack(side="left")
+        ttk.Button(f,text="Save Campus Images",command=self.save_campus).pack(side="left",padx=8)
         ttk.Button(f,text="Deep Analyze Selected",command=self.deep_selected).pack(side="left",padx=8)
         ttk.Button(f,text="Deep Analyze Top 10",command=lambda:self.deep_batch(10)).pack(side="left",padx=8)
         ttk.Button(f,text="Deep Analyze Top 25",command=lambda:self.deep_batch(25)).pack(side="left",padx=8)
@@ -321,7 +402,7 @@ class App:
         except Exception as e:self.r.after(0,lambda e=e:self.fail(e))
     def rowvals(self,n,z):
         fmt=lambda v:f"{v:,}" if v is not None else "UNKNOWN"
-        return (n,z["address"],fmt(z["largest"]),fmt(z["avg"]),z["count"],z["distance"],z["land"],z["tier"],
+        return (n,z.get("facility","") or "",z["address"],fmt(z["largest"]),fmt(z["avg"]),z["count"],len(meaningful_buildings(z)),z["distance"],z["land"],z["tier"],
                 "YES" if z["pre"] else "NO",z["pre_reason"],z["score"],z.get("deep_class",""),z.get("deep_score",""),z["source"])
     def show(self):
         for i in self.tree.get_children():self.tree.delete(i)
@@ -344,20 +425,27 @@ class App:
             try:aerial(z["lon"],z["lat"],z["largest"],out);self.r.after(0,lambda:self.st.set("Saved "+str(out)))
             except Exception as e:self.r.after(0,lambda:self.st.set("Download failed: "+repr(e)))
         threading.Thread(target=w,daemon=True).start()
+    def save_campus(self):
+        i=self.selidx()
+        if i is None:return
+        z=self.rows[i];safe="".join(c if c.isalnum() or c in "-_" else "_" for c in (z["address"] or "candidate"));out=Path.home()/"Downloads"/f"HVAC_CAMPUS_{safe}"
+        self.st.set("Generating campus/building inspection images...")
+        def w():
+            try:
+                imgs=campus_images(z,out);(out/"README.txt").write_text("Campus-aware inspection set. 00 is campus overview. Each B image is centered on one meaningful associated building and includes perimeter.\n\n"+"\n".join(f"{label}: {Path(p).name}" for label,p,_ in imgs))
+                self.r.after(0,lambda:self.st.set(f"Saved {len(imgs)} campus images to {out}"))
+            except Exception as e:self.r.after(0,lambda e=e:self.st.set("Save campus images failed: "+repr(e)))
+        threading.Thread(target=w,daemon=True).start()
     def getkey(self):
         k=self.key.get().strip()
         if not k:messagebox.showinfo("OpenAI key","Paste your OpenAI API key first.");return None
         return k
     def run_deep_one(self,i,k,batchpos=None,total=None):
-        z=self.rows[i]
-        tmp=Path(tempfile.gettempdir())/f"hvac_deep_{i}_{abs(hash((z['lon'],z['lat'])))}.jpg"
-        aerial(z["lon"],z["lat"],z["largest"],tmp)
+        z=self.rows[i];safe="".join(c if c.isalnum() or c in "-_" else "_" for c in (z["address"] or str(i)));root=Path(tempfile.gettempdir())/f"hvac_campus_{safe}_{abs(hash((z['lon'],z['lat'])))}"
         def prog(x):
-            prefix=f"[{batchpos}/{total}] " if batchpos else ""
-            self.r.after(0,lambda:self.st.set(prefix+x+" — "+(z["address"] or "candidate")))
-        result,obs,use=deep_run(k,tmp,prog)
-        z["deep_class"]=result["class"];z["deep_score"]=result["score"];z["deep_conf"]=result["confidence"]
-        z["deep_summary"]=result["summary"];z["deep_result"]=result;z["tokens"]=sum(use)
+            prefix=f"[{batchpos}/{total}] " if batchpos else "";self.r.after(0,lambda:self.st.set(prefix+x+" — "+(z.get("facility") or z["address"] or "candidate")))
+        result,buildings,use,errs,imgs=deep_run_campus(k,z,root,prog)
+        z["deep_class"]=result["class"];z["deep_score"]=result["score"];z["deep_conf"]=result["confidence"];z["deep_summary"]=result["summary"];z["deep_result"]=result;z["building_results"]=buildings;z["tokens"]=sum(use);z["deep_errors"]=errs;z["best_building"]=result["best_building"]
     def refresh(self):
         self.rows.sort(key=lambda z:(0 if z.get("deep_class")=="GOOD" else 1 if z.get("deep_class")=="MAYBE" else 2 if z.get("deep_class")=="POOR" else 3,
                                      -z.get("deep_score",0),0 if z["pre"] else 1,-z["score"],-(z["largest"] or 0)))
@@ -381,12 +469,16 @@ class App:
         if not ids:messagebox.showinfo("Deep Vision","No unscreened prescreen candidates.");return
         self.st.set(f"Deep Vision batch starting: {len(ids)} candidates...")
         def w():
-            errors=0
+            errors=[]
             for pos,i in enumerate(ids,1):
                 try:self.run_deep_one(i,k,pos,len(ids))
-                except Exception:errors+=1
+                except Exception as e:
+                    msg=f"{self.rows[i]['address']}: {type(e).__name__}: {e}";self.rows[i]["deep_error"]=msg;errors.append(msg)
             self.r.after(0,self.refresh)
-            self.r.after(0,lambda:self.st.set(f"Deep Vision batch complete: {len(ids)-errors} analyzed, {errors} errors."))
+            if errors:
+                log=Path.home()/"Downloads"/"HVAC_v091_batch_errors.txt";log.write_text("\n".join(errors))
+                self.r.after(0,lambda:self.st.set(f"Campus Deep Vision complete: {len(ids)-len(errors)} analyzed, {len(errors)} errors. Log: {log}"))
+            else:self.r.after(0,lambda:self.st.set(f"Campus Deep Vision complete: {len(ids)} analyzed, 0 errors."))
         threading.Thread(target=w,daemon=True).start()
     def copy(self):
         i=self.selidx()
