@@ -1,26 +1,23 @@
-HVAC Territory Discovery v0.9.4
+HVAC Territory Discovery v0.9.5 — Non-Diluting Campus
 
-ARCHITECTURE
-GIS/property prescreen -> campus-aware building selection -> frozen v0.6.6 Connection-Tracing analyzer on each meaningful building -> campus opportunity synthesis.
+Core business rule:
+ONE GOOD BUILDING = GOOD CAMPUS.
 
-IMPORTANT CHANGE
-v0.9.4 removes the v0.9.2/v0.9.3 building-recognition prompt modifications.
-The per-building inspection prompt and per-building 10-view synthesis prompt are restored verbatim from HVAC Deep Vision v0.6.6.
+Changes from v0.9.4:
+1. Frozen v0.6.6 building-recognition engine remains unchanged.
+2. Campus score is deterministically floored at the strongest physical-building score.
+3. Campus class cannot be lower than the strongest physical-building class.
+4. Poor/ordinary buildings cannot subtract from a stronger building.
+5. Additional MAYBE/GOOD buildings may add scope through campus synthesis.
+6. Accessory structures below the meaningful-building floor are no longer given an independent 11-call Deep Vision analysis.
+   Default floor is at least 2,500 ft², rising modestly on very large campuses.
+7. The selected-analysis status line now exposes individual building results, e.g.:
+   B1: GOOD 78 | B2: MAYBE 42
 
-PRESERVED FROM NEWER VERSIONS
-- Campus-aware multi-building coverage
-- Facility/business-name lookup
-- GIS prescreen
-- Save Campus Images
-- Batch error logging
-- Opportunity/max campus synthesis
+Regression:
+- 912 Birdneck should now inspect the ~83,743 ft² school and skip the ~1,099 ft² accessory footprint.
+- This test will tell us the raw B1 result directly. If B1 itself is only MAYBE, campus dilution was not the remaining cause.
+- 949 Birdneck should retain its multiple meaningful buildings.
+- 717 General Booth should remain strong.
 
-WHY
-v0.6.6 previously recognized the known side-mounted chiller/hydronic opportunity at 912 Birdneck much better than later prompt revisions. v0.9.4 treats v0.6.6 as a frozen building analyzer and puts campus logic around it instead of continually retuning equipment recognition.
-
-REGRESSION ORDER
-1. 912 Birdneck
-2. 949 Birdneck
-3. 717 General Booth
-
-Do not run a large batch until these three are checked.
+Do not retune the v0.6.6 HVAC recognition prompt in this build.

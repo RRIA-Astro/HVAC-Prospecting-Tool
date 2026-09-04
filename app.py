@@ -11,7 +11,7 @@ AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/Ima
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.4"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.5"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -226,11 +226,17 @@ def aerial_side(x,y,side_ft,out,pixels=1800):
     with urllib.request.urlopen(AERIAL+"?"+q,timeout=120) as r:Path(out).write_bytes(r.read())
 
 def meaningful_buildings(z,maxn=6):
+    """Buildings worth an independent 11-call Deep Vision inspection.
+    Accessory footprints should not consume budget or dilute a real process building.
+    """
     bs=sorted(z.get("buildings",[]),key=lambda b:b.get("sq",0),reverse=True)
     if not bs:return []
-    floor=max(1800,min(6000,(z.get("largest") or 6000)*0.04))
+    largest=z.get("largest") or bs[0].get("sq",0) or 0
+    # Absolute accessory floor plus a modest relative floor for very large campuses.
+    floor=max(2500,min(6000,largest*0.03))
     keep=[b for b in bs if b.get("sq",0)>=floor]
-    if len(keep)<min(2,len(bs)):keep=bs[:min(2,len(bs))]
+    # Always retain the largest physical building if footprint data exists.
+    if not keep and bs:keep=[bs[0]]
     return keep[:maxn]
 
 def campus_images(z,root):
@@ -380,15 +386,20 @@ def deep_run_building(c,path,label,progress):
     return x,obs,use
 
 CAMPUS_FINAL={"type":"object","additionalProperties":False,"properties":{"class":{"type":"string","enum":["GOOD","MAYBE","POOR"]},"score":{"type":"integer"},"confidence":{"type":"integer"},"best_building":{"type":"integer"},"high_value_buildings":{"type":"array","items":{"type":"integer"}},"key_evidence":{"type":"string"},"summary":{"type":"string"}},"required":["class","score","confidence","best_building","high_value_buildings","key_evidence","summary"]}
-CAMPUS_PROMPT="""Synthesize building-level commercial HVAC inspections for ONE campus/property. The sales opportunity is the CAMPUS, not the mailing-address building.
-Each physical building result was produced independently by the frozen v0.6.6 Connection-Tracing analyzer. Treat those building-level findings as the primary evidence; do not reinterpret or average them away.
-Use an OPPORTUNITY/MAXIMUM philosophy: one building with credible high-value mechanical equipment can make the entire campus GOOD even when every other building is ordinary.
-A probable/strong air-cooled or process chiller, cooling tower/heat-rejection system, substantial traceable hydronic/process-water circuit, mechanical yard, or genuinely large packaged equipment can independently make the campus valuable.
-If one building is GOOD because of credible central/process mechanical evidence, the campus should normally remain GOOD unless the building result itself is internally contradictory.
-Do not require cooling-tower evidence to validate a chiller opportunity, and do not require a visible chiller to validate a cooling-tower opportunity.
-Do not average away a strong process/utility building because office/admin/support buildings are poor.
-Building 0 is campus-overview context and is not a physical building; use it only as supporting context. Physical building analyses take precedence.
-Return the physical building number(s) carrying the strongest opportunity when identifiable. Favor recall for high-value equipment."""
+CAMPUS_PROMPT="""Synthesize building-level commercial HVAC inspections for ONE campus/property. The sales opportunity is the CAMPUS, not an average building.
+Each physical building was independently analyzed by the frozen v0.6.6 Connection-Tracing engine.
+
+NON-DILUTION RULE — MANDATORY:
+- Anchor the campus to the BEST physical-building opportunity.
+- A POOR or mediocre building can NEVER reduce/dilute the score or class earned by a stronger building.
+- Additional MAYBE/GOOD buildings may INCREASE the campus opportunity because they add service scope.
+- One GOOD physical building means the campus is GOOD.
+- Think MAXIMUM + POSITIVE ADDITIONS, never averaging.
+
+Building 0 is campus-overview context only and is NOT a physical building. It may add corroborating evidence but may not lower the campus.
+Accessory/support structures should not influence the opportunity merely because they are ordinary.
+Return the physical building number carrying the strongest opportunity and identify other high-value buildings when present.
+Favor recall for high-value central/process HVAC."""
 
 def deep_run_campus(key,z,root,progress):
     c=OpenAI(api_key=key,timeout=240);imgs=campus_images(z,root);results=[];use=[0,0];errors=[]
@@ -410,11 +421,26 @@ def deep_run_campus(key,z,root,progress):
     final,r=dv_ask(c,CAMPUS_PROMPT,[{"type":"input_text","text":json.dumps(results,separators=(",",":"))}],CAMPUS_FINAL,"campus_synthesis",5000,"medium")
     try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
     except:pass
+
+    # Hard business rule: weak buildings never dilute the strongest physical-building opportunity.
+    physical=[x for x in results if x.get("building",0)>0 and isinstance(x.get("result"),dict)]
+    if physical:
+        best=max(physical,key=lambda x:int(x["result"].get("score",0) or 0))
+        best_score=int(best["result"].get("score",0) or 0)
+        best_class=best["result"].get("class","POOR")
+        rank={"POOR":0,"MAYBE":1,"GOOD":2}
+        final["score"]=max(int(final.get("score",0) or 0),best_score)
+        if rank.get(best_class,0)>rank.get(final.get("class","POOR"),0):
+            final["class"]=best_class
+        final["best_building"]=best["building"]
+        # Other non-poor physical buildings are positive scope, never negative evidence.
+        positive=[x["building"] for x in physical if x["result"].get("class") in ("GOOD","MAYBE")]
+        final["high_value_buildings"]=sorted(set(final.get("high_value_buildings",[])+positive))
     return final,results,use,errors,imgs
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.4 — v0.6.6 Engine + Campus");r.geometry("1600x880")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.5 — Non-Diluting Campus");r.geometry("1600x880")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach test center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)
@@ -494,6 +520,12 @@ class App:
             prefix=f"[{batchpos}/{total}] " if batchpos else "";self.r.after(0,lambda:self.st.set(prefix+x+" — "+(z.get("facility") or z["address"] or "candidate")))
         result,buildings,use,errs,imgs=deep_run_campus(k,z,root,prog)
         z["deep_class"]=result["class"];z["deep_score"]=result["score"];z["deep_conf"]=result["confidence"];z["deep_summary"]=result["summary"];z["deep_result"]=result;z["building_results"]=buildings;z["tokens"]=sum(use);z["deep_errors"]=errs;z["best_building"]=result["best_building"]
+        parts=[]
+        for br in buildings:
+            if br.get("building",0)>0:
+                rr=br.get("result",{})
+                parts.append(f'B{br["building"]}: {rr.get("class","?")} {rr.get("score","?")}')
+        z["building_score_trace"]=" | ".join(parts)
     def refresh(self):
         self.rows.sort(key=lambda z:(0 if z.get("deep_class")=="GOOD" else 1 if z.get("deep_class")=="MAYBE" else 2 if z.get("deep_class")=="POOR" else 3,
                                      -z.get("deep_score",0),0 if z["pre"] else 1,-z["score"],-(z["largest"] or 0)))
@@ -507,7 +539,7 @@ class App:
             try:
                 self.run_deep_one(i,k);z=self.rows[i]
                 self.r.after(0,self.refresh)
-                self.r.after(0,lambda:self.st.set(f'{z["address"]}: {z["deep_class"]} {z["deep_score"]}/100 — {z["deep_summary"]} | {z["tokens"]:,} tokens'))
+                self.r.after(0,lambda:self.st.set(f'{z["address"]}: {z["deep_class"]} {z["deep_score"]}/100 — {z.get("building_score_trace","")} — {z["deep_summary"]} | {z["tokens"]:,} tokens'))
             except Exception as e:self.r.after(0,lambda e=e:self.st.set("Deep Vision failed: "+repr(e)))
         threading.Thread(target=w,daemon=True).start()
     def deep_batch(self,n):
