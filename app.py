@@ -11,7 +11,7 @@ AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/Ima
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.3"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.4"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -268,76 +268,76 @@ FINAL={"type":"object","additionalProperties":False,"properties":{
 
 IP="""BLIND COMMERCIAL HVAC FORENSIC AERIAL INSPECTION. Inspect ALL visible roof AND ground/perimeter areas.
 
-The prospecting objective is HIGH RECALL for expensive/complex mechanical opportunities. Exact inventory is secondary.
+Identify candidate equipment AND trace visible piping to discriminate equipment types.
 
-BALANCED HIGH-VALUE SEARCH — evaluate EACH category independently before deciding the site is ordinary:
-1. AIR-COOLED CHILLERS / PROCESS CHILLERS
-2. COOLING TOWERS / FLUID COOLERS / EVAPORATIVE HEAT REJECTION
-3. SUBSTANTIAL HYDRONIC OR PROCESS PIPING
-4. LARGE-TONNAGE PACKAGED HVAC
-5. MECHANICAL YARDS / CENTRAL-PLANT INFRASTRUCTURE
-Do not let strong or weak evidence in one category anchor the inspection of the others. In particular, do not focus on cooling towers at the expense of air-cooled chillers.
+HYDRONIC / PROCESS-WATER PIPING uses WEIGHTED evidence. Valves/flanges are NOT required. Strong clues include:
+- substantial diameter relative to condensate/drain piping;
+- paired supply/return-style runs;
+- multiple 90-degree turns or complex purposeful routing;
+- elevation changes/supports;
+- direct equipment-to-building or equipment-to-penthouse termination;
+- insulation;
+- valves, flanges, headers, strainers, gauges, pumps and fittings WHEN visible.
+White pipe is not automatically PVC. Large insulated white piping can be hydronic/process-water piping.
 
-AIR-COOLED CHILLER RECOGNITION:
-- Deliberately search roof edges, side yards, narrow service alleys, pads immediately beside buildings, and perimeter mechanical areas.
-- A large air-cooled chiller can look from above like a long rectangular bank of condensers or a packaged unit. Fan count alone is NOT diagnostic.
-- Favor a chiller/process-chiller interpretation when scale is substantial and morphology shows a long integrated machine with multiple axial condenser fans, especially when substantial piping leaves the machine and enters the building.
-- Large-diameter paired supply/return piping, insulation, purposeful multiple 90-degree turns, elevation changes/supports, and direct equipment-to-building routing are strong hydronic evidence.
-- Visible pumps, valves, flanges and headers are SUPPORTING evidence, not requirements; these components may be indoors.
-- White insulated hydronic piping can resemble PVC from aerial imagery. Judge diameter, paired routing, complexity and destination rather than color.
-- Do not dismiss a large fan-array machine as ordinary condensers merely because valves/flanges are not visible. Explicitly compare: integrated air-cooled chiller vs condenser bank vs packaged DX/RTU.
-- A credible large chiller or process chiller is independently high-value prospecting evidence even if no cooling tower is present.
+CONDENSATE / DX:
+- A small PVC condensate drain is POSITIVE evidence for direct-expansion packaged HVAC and AGAINST interpreting that unit as an air-cooled water chiller.
+- Condensate drainage is generally small and comparatively simple/gravity-routed.
+- Do not confuse a drain with a substantial paired circuit having multiple turns and purposeful routing.
 
-CONNECTION-TRACING RULES:
-- Large fan equipment alone does not prove a chiller. Inspect what connects to it.
-- Hydronic/process evidence is WEIGHTED, not gated on visible valves/flanges. Valves and specialties may be indoors.
-- Strong evidence can include substantial pipe diameter; paired supply/return; multiple 90-degree turns or complex purposeful routing;
-  elevation changes/supports; direct equipment-to-building or penthouse termination; insulation; and, when visible, valves/flanges/headers/pumps.
-- Large-diameter piping with several purposeful bends that enters a building can be strong water-system evidence even when valves are not visible.
-- White pipe is NOT automatically PVC. Color is not diagnostic.
-- Small simple PVC condensate drainage remains positive evidence for packaged DX and against a water chiller interpretation.
-- Trace credible piping in BOTH directions and reconsider ambiguous equipment based on what the piping connects.
-- Search for conventional cooling towers plus SMALL SINGLE-CELL cooling towers, low-profile/screened towers,
-  closed-circuit fluid coolers, evaporative condensers, induced-draft heat rejection, and atypical process chillers.
-- A small single-cell cooling tower / fluid cooler may appear from above as a compact square or rectangular outdoor enclosure
-  with ONE large axial top fan. Look for louvered/air-intake side structure, a fan opening/shroud, equipment base/enclosure,
-  and placement immediately beside a building or process area.
-- IMPORTANT: cooling-tower piping may disappear underground almost immediately or enter the building below grade. Lack of
-  long visible above-ground piping does NOT rule out a cooling tower or evaporative heat-rejection device.
-- Credible cooling-tower / evaporative heat-rejection morphology is independently high-value prospecting evidence. Do NOT
-  require visible valves, pumps, long hydronic pipe runs, or a separately visible chiller before treating it as important.
-- When a compact one-fan outdoor structure could reasonably be a cooling tower/fluid cooler, explicitly compare that
-  interpretation against ordinary exhaust fan, rooftop unit, condenser, dumpster/enclosure, or other non-HVAC alternatives.
-  If tower/fluid-cooler morphology is credible, report at least POSSIBLE/PROBABLE rather than dismissing it solely for weak piping visibility.
-- Mechanical complexity alone does not establish a central plant.
-- Large-tonnage packaged RTUs can still make a property worthwhile, but numerous small RTUs alone are weak.
-- Never treat not_observed in one crop as proof of absence. Use quantity bands rather than exact counts.
-Do not infer occupant, address, or business identity."""
+CONNECTION TRACING:
+- Whenever credible substantial or complex piping is visible, trace it in BOTH directions as far as the view permits.
+- Determine whether it appears equipment-to-building, equipment-to-penthouse, equipment-to-equipment, or unresolved.
+- If piping reaches an ambiguous fan-topped object, RECONSIDER that object's identity using the connection.
+- Strong equipment-to-building paired water piping can support a chiller/process-cooling interpretation even when valves/flanges are indoors or obscured.
 
-SP="""Synthesize overlapping observations for ONE property and deduplicate them.
-Prioritize the sales question: is there credible visible evidence of high-value central/process HVAC, air-cooled/process chillers, cooling towers/fluid coolers,
-substantial hydronic/process piping, mechanical yards, or unusually large packaged equipment?
+AIR-COOLED / PROCESS CHILLERS:
+- Morphology alone is insufficient.
+- Large multi-fan equipment connected to a substantial paired/routed water circuit can be a chiller even without externally visible specialties.
+- Process chillers may look different from typical comfort-cooling chillers; connection evidence may be more diagnostic than cabinet shape.
 
-SYNTHESIZE BALANCED EVIDENCE. Independently review the observations for (a) air-cooled/process chillers, (b) cooling towers/fluid coolers,
-(c) hydronic/process piping, (d) large packaged HVAC, and (e) mechanical-yard/central-plant evidence before assigning the class.
-Do not require one high-value category to corroborate another: a credible air-cooled chiller can make the building valuable without a cooling tower,
-and a credible cooling tower can make it valuable without a separately visible chiller.
-For possible air-cooled chillers, explicitly reconsider long rectangular multi-fan equipment beside the building using scale + integrated-machine morphology + connection routing.
-Fan count alone is not diagnostic. Substantial paired piping with purposeful bends and building termination strongly supports hydronic service even when valves/flanges are indoors or invisible.
+PACKAGED RTU / AHU:
+- Favor packaged DX when cabinet/curb/duct morphology is present, especially with a small condensate drain and no substantial water circuit.
+- Do not classify prominent exhaust, make-up-air, kitchen-hood, or ventilation equipment as a large RTU solely because it is physically large.
 
-Use connection evidence as a WEIGHTED chain:
-substantial diameter + paired runs + multiple purposeful 90-degree turns + building/equipment termination + insulation/supports
-can establish strong hydronic/process evidence even without visible valves/flanges. Valves may be indoors.
-White pipe is not automatically PVC. Small simple drain routing is DX evidence.
-If credible piping exists, trace its reported endpoints and reconsider connected equipment, including atypical process chillers
-and nonstandard heat rejection. However, do NOT require visible piping to validate credible cooling-tower morphology: tower piping
-can enter the ground or building almost immediately.
-A compact single-cell tower/fluid cooler with one large top axial fan, plausible louvered/air-intake enclosure, and appropriate
-ground-level placement beside a building is itself important evidence. If multiple crops support that morphology, a building may
-be GOOD even when the associated piping is buried or visually obscure.
-Do not invent a central plant merely from many RTUs.
-Favor recall for prospecting: false negatives on major central/process equipment are worse than small RTU count errors or
-chiller-vs-tower ambiguity. Exact tower-vs-chiller/fluid-cooler identity is less important than correctly flagging the property as worth pursuing."""
+COOLING TOWERS / HEAT REJECTION:
+- Search for conventional towers AND screened, partly enclosed, low-profile, closed-circuit, evaporative, induced-draft, and process heat-rejection equipment.
+- Do not require a visible plume.
+- Atypical fan-array/tower morphology PLUS substantial condenser/process-water piping is meaningful combined evidence.
+- If credible large water piping terminates at a tower-like/fan-array object, raise heat-rejection probability even if the form factor is unfamiliar.
+
+CENTRAL SYSTEM CAUTION:
+- Mechanical complexity alone does NOT establish a central plant.
+- Generic conduit, roof drains, seams, rails, shadows, gas piping, or isolated lines do NOT establish hydronic piping.
+- Conversely, do not reject a central system merely because valves/flanges are not visible when pipe size, pairing, routing geometry, and termination strongly support a pumped water circuit.
+
+Do not infer address, occupant, company, or building type. Use not_observed rather than claiming absence from one crop. Use quantity bands, not exact counts. Preserve plausible high-value equipment for synthesis."""
+
+SP="""Synthesize the independent overlapping observations from ONE property and deduplicate them. Use HVAC forensic CONNECTION EVIDENCE.
+
+WEIGHTED PIPING RULE:
+Do NOT require visible valves/flanges for hydronic/process-water piping. Strong evidence can arise from substantial diameter + paired runs + multiple 90-degree turns/complex routing + direct equipment-to-building/penthouse termination. Insulation, valves, flanges, headers, pumps and fittings strengthen the conclusion but are not mandatory. White pipe is not automatically PVC.
+
+DX RULE:
+Small simple PVC condensate drainage is positive DX evidence and MUST NOT create central-plant evidence. Large paired complex routed piping is fundamentally different.
+
+TRACE BEFORE CLASSIFYING:
+- If any crop reports credible substantial or complex piping, use the reported endpoints and geometry to reconsider connected equipment.
+- Large fan-topped equipment connected by a substantial paired routed circuit to a building/penthouse may be an air-cooled or process chiller despite atypical morphology.
+- Tower-like/fan-array equipment connected to substantial condenser/process-water piping may be cooling-tower/heat-rejection equipment even if screened, low-profile, enclosed, or nonstandard.
+- If strong piping evidence exists but equipment identity remains uncertain, preserve the property as a high-value prospect rather than automatically collapsing it to packaged DX.
+
+PACKAGED DX CHECK:
+Favor packaged RTU/AHU when cabinet/curb/duct evidence exists AND no substantial water circuit connects to the unit. A small condensate drain supports DX. Mechanical complexity alone does NOT establish a central plant.
+
+SCORING:
+- Confirmed/probable chiller, cooling tower, or strong traceable pumped central/process-water circuit should materially raise prospect score.
+- A credible unresolved large chiller/tower candidate with strong connection evidence should generally keep the property GOOD or upper-MAYBE for human review.
+- Genuinely large packaged RTUs can be worthwhile.
+- Numerous small packaged units alone are weak.
+- Not_observed is not proof of absence.
+
+In central_system_evidence and summary, explicitly explain the evidence chain, for example: substantial paired piping + multiple routed turns + equipment-to-building termination -> probable pumped hydronic/process-water circuit. Do not infer property identity or building type."""
 
 def dv_url(p):
     return "data:image/jpeg;base64,"+base64.b64encode(Path(p).read_bytes()).decode()
@@ -381,11 +381,13 @@ def deep_run_building(c,path,label,progress):
 
 CAMPUS_FINAL={"type":"object","additionalProperties":False,"properties":{"class":{"type":"string","enum":["GOOD","MAYBE","POOR"]},"score":{"type":"integer"},"confidence":{"type":"integer"},"best_building":{"type":"integer"},"high_value_buildings":{"type":"array","items":{"type":"integer"}},"key_evidence":{"type":"string"},"summary":{"type":"string"}},"required":["class","score","confidence","best_building","high_value_buildings","key_evidence","summary"]}
 CAMPUS_PROMPT="""Synthesize building-level commercial HVAC inspections for ONE campus/property. The sales opportunity is the CAMPUS, not the mailing-address building.
-Use an OPPORTUNITY/MAXIMUM philosophy, not an average: one building with credible high-value mechanical equipment can make the entire campus GOOD even when every other building is ordinary.
-Credible cooling-tower / fluid-cooler / evaporative heat-rejection evidence BY ITSELF is a strong sales signal and does not require separately visible chillers, pumps, or long piping. Piping may go underground immediately.
-Likewise, credible AIR-COOLED OR PROCESS CHILLERS, substantial hydronic/process piping, mechanical yards, or unusually large equipment can independently make the campus valuable. Do not require a cooling tower for a chiller-based opportunity. Treat chiller evidence and cooling-tower evidence as equal, independent high-value paths.
+Each physical building result was produced independently by the frozen v0.6.6 Connection-Tracing analyzer. Treat those building-level findings as the primary evidence; do not reinterpret or average them away.
+Use an OPPORTUNITY/MAXIMUM philosophy: one building with credible high-value mechanical equipment can make the entire campus GOOD even when every other building is ordinary.
+A probable/strong air-cooled or process chiller, cooling tower/heat-rejection system, substantial traceable hydronic/process-water circuit, mechanical yard, or genuinely large packaged equipment can independently make the campus valuable.
+If one building is GOOD because of credible central/process mechanical evidence, the campus should normally remain GOOD unless the building result itself is internally contradictory.
+Do not require cooling-tower evidence to validate a chiller opportunity, and do not require a visible chiller to validate a cooling-tower opportunity.
 Do not average away a strong process/utility building because office/admin/support buildings are poor.
-Building 0 is campus-overview context and is not a physical building; use it as supporting evidence only.
+Building 0 is campus-overview context and is not a physical building; use it only as supporting context. Physical building analyses take precedence.
 Return the physical building number(s) carrying the strongest opportunity when identifiable. Favor recall for high-value equipment."""
 
 def deep_run_campus(key,z,root,progress):
@@ -412,7 +414,7 @@ def deep_run_campus(key,z,root,progress):
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.3 — Balanced High-Value Recognition");r.geometry("1600x880")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.4 — v0.6.6 Engine + Campus");r.geometry("1600x880")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach test center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)

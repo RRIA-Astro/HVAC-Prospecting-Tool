@@ -1,21 +1,26 @@
-HVAC Territory Discovery v0.9.3 — Balanced High-Value Recognition
+HVAC Territory Discovery v0.9.4
 
-Goal
-Preserve v0.9.2 cooling-tower improvements while restoring equal emphasis on air-cooled/process chillers and hydronic/process systems.
+ARCHITECTURE
+GIS/property prescreen -> campus-aware building selection -> frozen v0.6.6 Connection-Tracing analyzer on each meaningful building -> campus opportunity synthesis.
 
-Changes
-- Every crop must independently search five high-value categories: chillers, towers/fluid coolers, hydronic/process piping, large packaged HVAC, and mechanical yards/central plants.
-- Explicit air-cooled chiller morphology: long integrated multi-fan equipment, scale, side-yard/perimeter placement, and equipment-to-building connections.
-- Fan count alone is not diagnostic.
-- Large paired piping, purposeful 90-degree routing, insulation and building termination support chiller/hydronic identification.
-- Visible valves/flanges/pumps are supporting evidence, not required.
-- White insulated hydronic pipe must not be dismissed as PVC based on color.
-- Cooling towers and chillers are independent, equally important prospecting paths.
-- v0.9.1 campus-aware coverage and v0.9.2 single-cell cooling-tower recognition remain intact.
+IMPORTANT CHANGE
+v0.9.4 removes the v0.9.2/v0.9.3 building-recognition prompt modifications.
+The per-building inspection prompt and per-building 10-view synthesis prompt are restored verbatim from HVAC Deep Vision v0.6.6.
 
-Regression set
-1. 912 Birdneck: known large air-cooled chiller beside building. Target: materially stronger than v0.9.2 MAYBE 45, ideally recognition of chiller/hydronic evidence.
-2. 949 Birdneck: retain useful high-MAYBE behavior for possible single-cell heat rejection; do not force GOOD.
-3. 717 General Booth: retain GOOD behavior and high-value process/mechanical-yard detection.
+PRESERVED FROM NEWER VERSIONS
+- Campus-aware multi-building coverage
+- Facility/business-name lookup
+- GIS prescreen
+- Save Campus Images
+- Batch error logging
+- Opportunity/max campus synthesis
 
-Recommended test order: 912 -> 949 -> 717. Run individually before another batch.
+WHY
+v0.6.6 previously recognized the known side-mounted chiller/hydronic opportunity at 912 Birdneck much better than later prompt revisions. v0.9.4 treats v0.6.6 as a frozen building analyzer and puts campus logic around it instead of continually retuning equipment recognition.
+
+REGRESSION ORDER
+1. 912 Birdneck
+2. 949 Birdneck
+3. 717 General Booth
+
+Do not run a large batch until these three are checked.
