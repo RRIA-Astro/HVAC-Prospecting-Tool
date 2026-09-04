@@ -1,26 +1,21 @@
-HVAC Territory Discovery v0.9.2
+HVAC Territory Discovery v0.9.3 — Balanced High-Value Recognition
 
-Recognition refinement based on the known 949 Birdneck regression case.
+Goal
+Preserve v0.9.2 cooling-tower improvements while restoring equal emphasis on air-cooled/process chillers and hydronic/process systems.
 
-UNCHANGED
-- v0.9.1 campus-aware building selection/coverage
-- GIS prescreen
-- facility-name lookup
-- multi-building analysis
-- batch error logging
+Changes
+- Every crop must independently search five high-value categories: chillers, towers/fluid coolers, hydronic/process piping, large packaged HVAC, and mechanical yards/central plants.
+- Explicit air-cooled chiller morphology: long integrated multi-fan equipment, scale, side-yard/perimeter placement, and equipment-to-building connections.
+- Fan count alone is not diagnostic.
+- Large paired piping, purposeful 90-degree routing, insulation and building termination support chiller/hydronic identification.
+- Visible valves/flanges/pumps are supporting evidence, not required.
+- White insulated hydronic pipe must not be dismissed as PVC based on color.
+- Cooling towers and chillers are independent, equally important prospecting paths.
+- v0.9.1 campus-aware coverage and v0.9.2 single-cell cooling-tower recognition remain intact.
 
-CHANGED
-- Deep Vision explicitly searches for small single-cell cooling towers / fluid coolers.
-- One large axial top fan on a compact ground-level tower-like enclosure is now a recognized morphology.
-- Louvered/air-intake enclosure morphology and location beside a building are explicit evidence.
-- Cooling-tower piping may disappear underground immediately; long visible piping is NOT required.
-- Credible cooling-tower / evaporative heat-rejection morphology is independently high-value.
-- Building synthesis must compare compact tower-like equipment against ordinary exhaust/condenser/non-HVAC alternatives.
-- Campus synthesis uses opportunity/max logic: one strong process/mechanical building can make the whole campus GOOD.
+Regression set
+1. 912 Birdneck: known large air-cooled chiller beside building. Target: materially stronger than v0.9.2 MAYBE 45, ideally recognition of chiller/hydronic evidence.
+2. 949 Birdneck: retain useful high-MAYBE behavior for possible single-cell heat rejection; do not force GOOD.
+3. 717 General Booth: retain GOOD behavior and high-value process/mechanical-yard detection.
 
-FIRST REGRESSION
-949 Birdneck only.
-The known cooling-tower building is Building 1 in the saved campus set.
-Expected behavior: Building 1 should receive materially stronger cooling-tower/fluid-cooler evidence and the campus should rise above the v0.9.1 MAYBE 48 result.
-
-Do not batch Top 10/25 until 949 is retested.
+Recommended test order: 912 -> 949 -> 717. Run individually before another batch.

@@ -11,7 +11,7 @@ AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/Ima
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.2"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.3"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -270,6 +270,24 @@ IP="""BLIND COMMERCIAL HVAC FORENSIC AERIAL INSPECTION. Inspect ALL visible roof
 
 The prospecting objective is HIGH RECALL for expensive/complex mechanical opportunities. Exact inventory is secondary.
 
+BALANCED HIGH-VALUE SEARCH — evaluate EACH category independently before deciding the site is ordinary:
+1. AIR-COOLED CHILLERS / PROCESS CHILLERS
+2. COOLING TOWERS / FLUID COOLERS / EVAPORATIVE HEAT REJECTION
+3. SUBSTANTIAL HYDRONIC OR PROCESS PIPING
+4. LARGE-TONNAGE PACKAGED HVAC
+5. MECHANICAL YARDS / CENTRAL-PLANT INFRASTRUCTURE
+Do not let strong or weak evidence in one category anchor the inspection of the others. In particular, do not focus on cooling towers at the expense of air-cooled chillers.
+
+AIR-COOLED CHILLER RECOGNITION:
+- Deliberately search roof edges, side yards, narrow service alleys, pads immediately beside buildings, and perimeter mechanical areas.
+- A large air-cooled chiller can look from above like a long rectangular bank of condensers or a packaged unit. Fan count alone is NOT diagnostic.
+- Favor a chiller/process-chiller interpretation when scale is substantial and morphology shows a long integrated machine with multiple axial condenser fans, especially when substantial piping leaves the machine and enters the building.
+- Large-diameter paired supply/return piping, insulation, purposeful multiple 90-degree turns, elevation changes/supports, and direct equipment-to-building routing are strong hydronic evidence.
+- Visible pumps, valves, flanges and headers are SUPPORTING evidence, not requirements; these components may be indoors.
+- White insulated hydronic piping can resemble PVC from aerial imagery. Judge diameter, paired routing, complexity and destination rather than color.
+- Do not dismiss a large fan-array machine as ordinary condensers merely because valves/flanges are not visible. Explicitly compare: integrated air-cooled chiller vs condenser bank vs packaged DX/RTU.
+- A credible large chiller or process chiller is independently high-value prospecting evidence even if no cooling tower is present.
+
 CONNECTION-TRACING RULES:
 - Large fan equipment alone does not prove a chiller. Inspect what connects to it.
 - Hydronic/process evidence is WEIGHTED, not gated on visible valves/flanges. Valves and specialties may be indoors.
@@ -297,8 +315,15 @@ CONNECTION-TRACING RULES:
 Do not infer occupant, address, or business identity."""
 
 SP="""Synthesize overlapping observations for ONE property and deduplicate them.
-Prioritize the sales question: is there credible visible evidence of high-value central/process HVAC, cooling towers, chillers,
+Prioritize the sales question: is there credible visible evidence of high-value central/process HVAC, air-cooled/process chillers, cooling towers/fluid coolers,
 substantial hydronic/process piping, mechanical yards, or unusually large packaged equipment?
+
+SYNTHESIZE BALANCED EVIDENCE. Independently review the observations for (a) air-cooled/process chillers, (b) cooling towers/fluid coolers,
+(c) hydronic/process piping, (d) large packaged HVAC, and (e) mechanical-yard/central-plant evidence before assigning the class.
+Do not require one high-value category to corroborate another: a credible air-cooled chiller can make the building valuable without a cooling tower,
+and a credible cooling tower can make it valuable without a separately visible chiller.
+For possible air-cooled chillers, explicitly reconsider long rectangular multi-fan equipment beside the building using scale + integrated-machine morphology + connection routing.
+Fan count alone is not diagnostic. Substantial paired piping with purposeful bends and building termination strongly supports hydronic service even when valves/flanges are indoors or invisible.
 
 Use connection evidence as a WEIGHTED chain:
 substantial diameter + paired runs + multiple purposeful 90-degree turns + building/equipment termination + insulation/supports
@@ -358,7 +383,7 @@ CAMPUS_FINAL={"type":"object","additionalProperties":False,"properties":{"class"
 CAMPUS_PROMPT="""Synthesize building-level commercial HVAC inspections for ONE campus/property. The sales opportunity is the CAMPUS, not the mailing-address building.
 Use an OPPORTUNITY/MAXIMUM philosophy, not an average: one building with credible high-value mechanical equipment can make the entire campus GOOD even when every other building is ordinary.
 Credible cooling-tower / fluid-cooler / evaporative heat-rejection evidence BY ITSELF is a strong sales signal and does not require separately visible chillers, pumps, or long piping. Piping may go underground immediately.
-Likewise, credible chillers, substantial hydronic/process piping, mechanical yards, or unusually large equipment can independently make the campus valuable.
+Likewise, credible AIR-COOLED OR PROCESS CHILLERS, substantial hydronic/process piping, mechanical yards, or unusually large equipment can independently make the campus valuable. Do not require a cooling tower for a chiller-based opportunity. Treat chiller evidence and cooling-tower evidence as equal, independent high-value paths.
 Do not average away a strong process/utility building because office/admin/support buildings are poor.
 Building 0 is campus-overview context and is not a physical building; use it as supporting evidence only.
 Return the physical building number(s) carrying the strongest opportunity when identifiable. Favor recall for high-value equipment."""
@@ -387,7 +412,7 @@ def deep_run_campus(key,z,root,progress):
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.2 — Cooling-Tower Recognition");r.geometry("1600x880")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.3 — Balanced High-Value Recognition");r.geometry("1600x880")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach test center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)
