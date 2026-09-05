@@ -403,19 +403,23 @@ def _best_signal(obs, field):
             pass
     hits.sort(reverse=True)
     if not hits:
-        return {"status":"not_observed","confidence":0,"views":0,"best_view":"","evidence":""}
+        return {"status":"not_observed","confidence":0,"views":0,"strong_views":0,"probable_views":0,"best_view":"","evidence":""}
     rank,conf,view,evidence=hits[0]
     status={1:"possible",2:"probable",3:"strong"}.get(rank,"not_observed")
-    return {"status":status,"confidence":conf,"views":len(hits),"best_view":view,"evidence":evidence}
+    strong_views=sum(1 for r,_,_,_ in hits if r>=3)
+    probable_views=sum(1 for r,_,_,_ in hits if r>=2)
+    return {"status":status,"confidence":conf,"views":len(hits),"strong_views":strong_views,"probable_views":probable_views,"best_view":view,"evidence":evidence}
 
 def deterministic_sales_score(obs, model_result):
     """
-    v0.9.9 high-recall scoring with a low-value-only safeguard.
+    v0.9.10 rule-engine correction.
 
-    High-value central/process evidence remains asymmetric: credible chillers,
-    towers and pumped-water evidence can lift a prospect. But repeated small
-    condensers / small packaged equipment cannot accumulate into a false
-    commercial opportunity.
+    GOOD requires a qualified high-value anchor. Weak/ambiguous mechanical
+    evidence may remain MAYBE for human review, but the deterministic layer
+    may not manufacture GOOD from a probable equipment guess plus generic
+    mechanical-yard clutter. This is intentionally asymmetric: uncertain
+    prospects are retained, while GOOD is reserved for credible central/process
+    equipment or a genuinely strong water-system signal.
     """
     ch=_best_signal(obs,"air_cooled_chillers")
     tw=_best_signal(obs,"cooling_towers")
@@ -428,73 +432,90 @@ def deterministic_sales_score(obs, model_result):
     raw=int(model_result.get("score",0) or 0)
     floors=[]; reasons=[]
 
-    def corroborated():
-        return pp["status"] in ("probable","strong") or my["status"] in ("probable","strong")
+    # A generic mechanical yard is useful context but is NOT enough to turn a
+    # one-view probable chiller/tower guess into GOOD. Water piping is much more
+    # diagnostic and is allowed to corroborate it.
+    piping_corroboration = pp["status"] in ("probable","strong")
 
-    def high_value_floor(sig,name):
-        st,cf,n=sig["status"],sig["confidence"],sig["views"]
-        cor=corroborated()
-        if st=="strong":
-            val=78
-            if cf>=80: val=84
-            if n>=2: val+=4
-            floors.append(min(94,val)); reasons.append(f"{name} strong {cf}% in {n} view(s)"); return
-        if st=="probable":
-            if n>=2 or cor:
-                val=68 + (5 if cf>=70 else 0) + (4 if n>=3 else 0)
+    def qualified_equipment(sig):
+        if sig["status"]=="strong" and sig["confidence"]>=65:
+            return True
+        if sig["status"]=="probable":
+            # Repetition must be repetition at PROBABLE-or-better, not merely
+            # several POSSIBLE mentions in overlapping crops.
+            if sig.get("probable_views",0)>=2 and sig["confidence"]>=60:
+                return True
+            if piping_corroboration and sig["confidence"]>=60:
+                return True
+        return False
+
+    qualified_chiller=qualified_equipment(ch)
+    qualified_tower=qualified_equipment(tw)
+    qualified_water = pp["status"]=="strong" and pp["confidence"]>=70
+    qualified_anchor = qualified_chiller or qualified_tower or qualified_water
+
+    def high_value_floor(sig,name,qualified):
+        st,cf=sig["status"],sig["confidence"]
+        pv=sig.get("probable_views",0)
+        if qualified:
+            if st=="strong":
+                val=78 + (6 if cf>=80 else 0) + (4 if sig.get("strong_views",0)>=2 else 0)
             else:
-                val=58 if cf>=60 else 54
-            floors.append(min(90,val)); reasons.append(f"{name} probable {cf}% in {n} view(s)"+(" with corroboration" if cor else "")); return
-        if st=="possible":
-            # Possible morphology is review evidence only; never GOOD by itself.
-            val=58 if n>=3 and cor else 52 if (n>=2 or cor) else 0
-            if val: floors.append(val); reasons.append(f"{name} possible {cf}% in {n} view(s)"+(" with corroboration" if cor else ""))
+                val=68 + (5 if cf>=70 else 0) + (4 if pv>=3 else 0)
+            floors.append(min(94,val)); reasons.append(f"qualified {name} {st} {cf}% ({pv} probable+ views)")
+            return
+        # Unresolved morphology stays visible for review but cannot create GOOD.
+        if st=="probable":
+            val=58 if cf>=60 else 54
+            floors.append(val); reasons.append(f"unconfirmed {name} probable {cf}% ({pv} probable+ views)")
+        elif st=="possible" and (sig["views"]>=2 or piping_corroboration):
+            val=52 if sig["views"]>=2 else 48
+            floors.append(val); reasons.append(f"unconfirmed {name} possible {cf}%")
 
-    high_value_floor(ch,"air-cooled/process chiller")
-    high_value_floor(tw,"cooling tower/heat rejection")
+    high_value_floor(ch,"air-cooled/process chiller",qualified_chiller)
+    high_value_floor(tw,"cooling tower/heat rejection",qualified_tower)
 
-    if pp["status"]=="strong": floors.append(70); reasons.append(f"piping strong {pp['confidence']}%")
-    elif pp["status"]=="probable": floors.append(60); reasons.append(f"piping probable {pp['confidence']}%")
+    if qualified_water:
+        floors.append(70); reasons.append(f"qualified strong water/process piping {pp['confidence']}%")
+    elif pp["status"]=="strong":
+        floors.append(60); reasons.append(f"strong but not fully qualified piping {pp['confidence']}%")
+    elif pp["status"]=="probable":
+        floors.append(56); reasons.append(f"probable piping {pp['confidence']}%")
 
-    # Large packaged HVAC is useful only when the visual evidence is repeated
-    # enough to support actual scale. It can create MAYBE, never GOOD.
-    if lg["status"]=="strong" and lg["confidence"]>=70 and lg["views"]>=2:
-        floors.append(56); reasons.append(f"large packaged HVAC strong/scale-supported {lg['confidence']}% in {lg['views']} views")
-    elif lg["status"]=="strong":
-        floors.append(48); reasons.append("large packaged HVAC strong but scale/repetition limited")
-    elif lg["status"]=="probable" and lg["confidence"]>=60 and lg["views"]>=2:
-        floors.append(48); reasons.append(f"large packaged HVAC probable across {lg['views']} views")
+    # Large packaged HVAC can justify review but cannot by itself create GOOD.
+    if lg["status"]=="strong" and lg["confidence"]>=70 and lg.get("strong_views",0)>=2:
+        floors.append(56); reasons.append("scale-supported large packaged HVAC")
+    elif lg["status"] in ("strong","probable"):
+        floors.append(48); reasons.append("large packaged HVAC without central/process anchor")
     elif lg["status"]=="possible" and lg["views"]>=3:
-        floors.append(44); reasons.append(f"large packaged HVAC possible across {lg['views']} views")
+        floors.append(44); reasons.append("possible large packaged HVAC")
 
-    independent=sum(1 for q in (ch,tw,pp) if q["status"] in ("probable","strong"))
     floor=max(floors) if floors else 0
-    if independent>=2 and floor>=60: floor=min(94,floor+5)
+    if sum((qualified_chiller,qualified_tower,qualified_water))>=2 and floor>=60:
+        floor=min(94,floor+5)
 
-    # LOW-VALUE-ONLY SAFEGUARD. This is deliberately a narrow exception to
-    # the usual floor-only philosophy. If the evidence is dominated by small
-    # local equipment and there is no credible high-value channel, GPT cannot
-    # turn quantity/ambiguity into a 50-60 point campus prospect.
-    credible_central = any(q["status"] in ("probable","strong") for q in (ch,tw,pp))
-    credible_yard = my["status"] in ("probable","strong") and my["confidence"]>=65
-    credible_large = (
-        lg["status"]=="strong" and lg["confidence"]>=75 and lg["views"]>=3
-    ) or (
-        lg["status"]=="probable" and lg["confidence"]>=70 and lg["views"]>=3 and credible_yard
-    )
-    local_hvac = (sm["status"] in ("probable","strong") or co["status"] in ("probable","strong"))
-    low_value_only = local_hvac and not credible_central and not credible_yard and not credible_large
+    local_hvac=(sm["status"] in ("probable","strong") or co["status"] in ("probable","strong"))
+    credible_yard=my["status"] in ("probable","strong") and my["confidence"]>=65
+    credible_large=(lg["status"]=="strong" and lg["confidence"]>=75 and lg.get("strong_views",0)>=2)
+    low_value_only=local_hvac and not qualified_anchor and not credible_large and not credible_yard and ch["status"] not in ("probable","strong") and tw["status"] not in ("probable","strong")
 
     adjusted_raw=raw
     if low_value_only:
-        adjusted_raw=min(adjusted_raw,39)
-        floor=min(floor,39)
-        reasons.append("low-value-only safeguard: small/local HVAC cannot accumulate into MAYBE")
+        adjusted_raw=min(adjusted_raw,39); floor=min(floor,39)
+        reasons.append("low-value-only safeguard")
+    elif not qualified_anchor:
+        # Critical v0.9.10 guardrail: GPT may call an ambiguous site GOOD, but
+        # without a qualified central/process anchor it remains a human-review
+        # MAYBE. This preserves recall without labeling ordinary sites GOOD.
+        adjusted_raw=min(adjusted_raw,62); floor=min(floor,62)
+        reasons.append("GOOD guardrail: no qualified central/process anchor")
 
     final=max(adjusted_raw,floor)
     cls="GOOD" if final>=65 else "MAYBE" if final>=40 else "POOR"
     return final,cls,{
         "model_score":raw,"adjusted_model_score":adjusted_raw,"rule_floor":floor,
+        "qualified_anchor":qualified_anchor,"qualified_chiller":qualified_chiller,
+        "qualified_tower":qualified_tower,"qualified_water":qualified_water,
         "low_value_only":low_value_only,
         "air_cooled_chiller":ch,"cooling_tower":tw,"piping":pp,
         "large_packaged_hvac":lg,"small_packaged_hvac":sm,"condensers":co,
@@ -515,7 +536,7 @@ def deep_run_building(c,path,label,progress):
     try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
     except:pass
 
-    # v0.9.8: GPT performs equipment recognition; deterministic business rules
+    # v0.9.10: GPT performs equipment recognition; deterministic business rules
     # establish the minimum sales-prospect score. This prevents "no visible
     # water loop" from vetoing a credible large chiller/tower anomaly.
     sales_score,sales_class,sales_trace=deterministic_sales_score(obs,x)
@@ -591,7 +612,7 @@ def deep_run_campus(key,z,root,progress):
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.9 — Low-Value Suppression");r.geometry("1600x880")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.10 — Low-Value Suppression");r.geometry("1600x880")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach test center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)

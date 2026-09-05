@@ -1,4 +1,4 @@
-HVAC Territory Discovery v0.9.9 — Calibrated Sales Scoring
+HVAC Territory Discovery v0.9.10 — Calibrated Sales Scoring
 
 PURPOSE
 Calibrate deterministic scoring using:
@@ -26,4 +26,4 @@ Desired behavior:
 - 589: POOR/MAYBE, but NOT promoted to GOOD by the deterministic rule.
 
 
-v0.9.9 calibration: suppresses low-value-only small/local HVAC false positives; weak MAYBE buildings no longer accumulate into a stronger campus. High-value chiller/tower/process evidence remains recall-biased.
+v0.9.10 calibration: suppresses low-value-only small/local HVAC false positives; weak MAYBE buildings no longer accumulate into a stronger campus. High-value chiller/tower/process evidence remains recall-biased.
