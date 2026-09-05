@@ -1,27 +1,28 @@
-HVAC Territory Discovery v0.9.6 — Prospect-Oriented Chiller Recognition
+HVAC Territory Discovery v0.9.7 — Deterministic Sales Scoring
 
-WHAT STAYS FROZEN
-- v0.9.5 campus discovery/coverage
-- meaningful-building filter
-- non-dilution rule: one GOOD building = GOOD campus
-- cooling-tower/process-water logic
-- GIS prescreen and facility lookup
+ARCHITECTURE CHANGE
+GPT identifies visible equipment. Code, not GPT, sets a minimum sales-opportunity score from those observations.
 
-WHAT CHANGES
-The building-level Deep Vision decision standard for air-cooled/process chillers.
+WHY
+The exact 912 Birdneck image repeatedly produced a chiller-like observation but GPT downgraded the property because it could not prove a water loop. For prospecting, that is the wrong veto.
 
-A/B test finding:
-The exact 912 Birdneck B1 image run through standalone v0.6.6 returned MAYBE 42.
-It DID notice the long ground-level rectangular unit as chiller-like, but refused to elevate it because a traceable water circuit could not be proven.
+RULES
+- Credible large air-cooled/process chiller morphology establishes a sales-score floor even without visible piping.
+- Cooling-tower/heat-rejection morphology does the same.
+- Strong/probable hydronic/process piping independently raises the floor.
+- Large packaged HVAC gets a smaller floor.
+- Piping corroborates high-value equipment but its absence never subtracts.
+- GPT's original synthesis score is retained as model_score for diagnostics.
+- Final building score = max(model_score, deterministic rule floor).
+- Campus non-dilution remains unchanged: best physical building cannot be diluted by poor/accessory buildings.
 
-v0.9.6 changes that business rule:
-- This is a SALES-PROSPECT screen, not definitive equipment verification.
-- Strong large-chiller morphology is independently valuable.
-- Piping is a confidence amplifier, not a mandatory gate.
-- Large ground/pad/perimeter multi-fan machines are evaluated using chassis continuity, fan-array organization, finned sections, scale, placement, roof-curb/duct evidence, and connections.
-- Hidden/buried/indoor/low-resolution piping must not automatically collapse a compelling chiller candidate to ordinary packaged DX.
-- Strong morphology + piping remains higher confidence than morphology alone.
+UI DIAGNOSTIC
+After analysis, the building trace shows:
+B1: GOOD 68 [model 42, rule 68]
+This makes it clear whether the result came from GPT synthesis or the deterministic sales rules.
 
-FIRST TEST
-912 Birdneck only.
-We want the model to recognize that a compelling large chiller-like machine is enough to cue salesperson review without falsely claiming that the chilled-water circuit is proven.
+FIRST REGRESSION SET
+1. 912 Birdneck — should be elevated if the detector again reports the large chiller-like anomaly.
+2. 717 General Booth — should remain GOOD.
+3. 949 Birdneck — should remain at least review-worthy if tower/heat-rejection evidence is detected.
+4. 589 Birdneck — should remain low/poor if it only shows ordinary light-industrial HVAC.
