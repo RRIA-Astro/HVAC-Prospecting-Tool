@@ -11,7 +11,7 @@ AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/Ima
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.7"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.8"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -406,9 +406,16 @@ def _best_signal(obs, field):
 
 def deterministic_sales_score(obs, model_result):
     """
-    Convert visual observations into a sales-opportunity floor.
-    GPT identifies equipment; these rules decide whether it deserves salesperson review.
-    Missing piping never subtracts from a credible chiller/tower candidate.
+    v0.9.8 conservative deterministic scoring.
+
+    912 Birdneck is the positive control: a genuinely large, multi-fan,
+    ground-mounted chiller candidate must be able to surface even when piping
+    cannot be proven.
+
+    589 Birdneck is the negative control: an ordinary small side-mounted
+    packaged unit / weak large-equipment hallucination must NOT become GOOD.
+
+    Core rule: weak morphology alone can request REVIEW, but cannot create GOOD.
     """
     ch=_best_signal(obs,"air_cooled_chillers")
     tw=_best_signal(obs,"cooling_towers")
@@ -416,54 +423,100 @@ def deterministic_sales_score(obs, model_result):
     lg=_best_signal(obs,"large_packaged_hvac")
     my=_best_signal(obs,"mechanical_yard")
 
+    raw=int(model_result.get("score",0) or 0)
     floors=[]
     reasons=[]
 
-    def equipment_floor(sig,name):
+    def corroborated(sig):
+        # Independent visual corroboration. Absence never subtracts.
+        return (
+            pp["status"] in ("probable","strong") or
+            my["status"] in ("probable","strong")
+        )
+
+    def high_value_floor(sig,name):
         st,cf,n=sig["status"],sig["confidence"],sig["views"]
+        cor=corroborated(sig)
+
         if st=="strong":
-            val=82 + min(8,max(0,(cf-70)//5))
-        elif st=="probable":
-            val=72 + min(8,max(0,(cf-50)//5))
-        elif st=="possible":
-            # Prospecting threshold: a credible large-equipment anomaly is enough
-            # for human review even if water piping cannot be proven.
-            val=64 + min(8,max(0,(cf-30)//5))
-        else:
+            # Strong high-value equipment can stand on morphology alone.
+            val=78
+            if cf>=80: val=84
+            if n>=2: val+=4
+            floors.append(min(94,val))
+            reasons.append(f"{name} strong {cf}% in {n} view(s)")
             return
-        if n>=2: val+=4
-        if n>=3: val+=3
-        floors.append(min(95,val))
-        reasons.append(f"{name} {st} {cf}% in {n} view(s), best={sig['best_view']}")
 
-    equipment_floor(ch,"air-cooled/process chiller")
-    equipment_floor(tw,"cooling tower/heat rejection")
+        if st=="probable":
+            # One probable view is review-worthy, not automatically GOOD.
+            # Multiple views or independent process/hydronic-yard evidence
+            # are required for a GOOD deterministic floor.
+            if n>=2 or cor:
+                val=68
+                if cf>=70: val+=5
+                if n>=3: val+=4
+            else:
+                val=58 if cf>=60 else 54
+            floors.append(min(90,val))
+            reasons.append(
+                f"{name} probable {cf}% in {n} view(s)"
+                + (" with corroboration" if cor else "")
+            )
+            return
 
-    # Strong hydronic/process piping is independently interesting.
+        if st=="possible":
+            # This is the key 589 safeguard. "Possible" is never enough to
+            # manufacture GOOD. Repetition/corroboration can only create MAYBE.
+            if n>=3 and cor:
+                val=58
+            elif n>=2 or cor:
+                val=52
+            else:
+                val=0
+            if val:
+                floors.append(val)
+                reasons.append(
+                    f"{name} possible {cf}% in {n} view(s)"
+                    + (" with corroboration" if cor else "")
+                )
+
+    high_value_floor(ch,"air-cooled/process chiller")
+    high_value_floor(tw,"cooling tower/heat rejection")
+
+    # Piping is independently useful, but weak piping is not a substitute
+    # for actual high-value equipment.
     if pp["status"]=="strong":
-        floors.append(78);reasons.append(f"piping strong {pp['confidence']}%")
+        floors.append(70)
+        reasons.append(f"piping strong {pp['confidence']}%")
     elif pp["status"]=="probable":
-        floors.append(68);reasons.append(f"piping probable {pp['confidence']}%")
-    elif pp["status"]=="possible" and pp["views"]>=2:
-        floors.append(58);reasons.append(f"piping possible across {pp['views']} views")
+        floors.append(60)
+        reasons.append(f"piping probable {pp['confidence']}%")
 
-    # Large packaged equipment can make a worthwhile lead, but should not
-    # outrank a chiller/tower signal.
+    # Large packaged HVAC alone is a MAYBE signal. Never create GOOD.
     if lg["status"]=="strong":
-        floors.append(64);reasons.append(f"large packaged HVAC strong {lg['confidence']}%")
+        floors.append(58)
+        reasons.append(f"large packaged HVAC strong {lg['confidence']}%")
     elif lg["status"]=="probable":
-        floors.append(58);reasons.append(f"large packaged HVAC probable {lg['confidence']}%")
-    elif lg["status"]=="possible" and lg["views"]>=2:
-        floors.append(50);reasons.append(f"large packaged HVAC possible across {lg['views']} views")
+        floors.append(52)
+        reasons.append(f"large packaged HVAC probable {lg['confidence']}%")
+    elif lg["status"]=="possible" and lg["views"]>=3:
+        floors.append(46)
+        reasons.append(f"large packaged HVAC possible across {lg['views']} views")
 
-    # Multiple independent high-value channels add modest corroboration.
-    high_channels=sum(1 for s in (ch,tw,pp) if s["status"] in ("probable","strong"))
+    # Multiple INDEPENDENT high-value channels can strengthen the floor.
+    # Do not count packaged HVAC here.
+    independent=sum(
+        1 for s in (ch,tw,pp)
+        if s["status"] in ("probable","strong")
+    )
     floor=max(floors) if floors else 0
-    if high_channels>=2: floor=min(97,floor+6)
+    if independent>=2 and floor>=60:
+        floor=min(94,floor+5)
 
-    raw=int(model_result.get("score",0) or 0)
+    # Deterministic logic is a floor, not a penalty. It cannot lower GPT.
     final=max(raw,floor)
     cls="GOOD" if final>=65 else "MAYBE" if final>=40 else "POOR"
+
     return final,cls,{
         "model_score":raw,
         "rule_floor":floor,
@@ -474,6 +527,7 @@ def deterministic_sales_score(obs, model_result):
         "mechanical_yard":my,
         "reasons":reasons
     }
+
 
 def deep_run_building(c,path,label,progress):
     views=dv_crops(path);obs=[];use=[0,0]
@@ -488,7 +542,7 @@ def deep_run_building(c,path,label,progress):
     try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
     except:pass
 
-    # v0.9.7: GPT performs equipment recognition; deterministic business rules
+    # v0.9.8: GPT performs equipment recognition; deterministic business rules
     # establish the minimum sales-prospect score. This prevents "no visible
     # water loop" from vetoing a credible large chiller/tower anomaly.
     sales_score,sales_class,sales_trace=deterministic_sales_score(obs,x)
@@ -557,7 +611,7 @@ def deep_run_campus(key,z,root,progress):
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.7 — Deterministic Sales Scoring");r.geometry("1600x880")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.8 — Calibrated Sales Scoring");r.geometry("1600x880")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach test center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)

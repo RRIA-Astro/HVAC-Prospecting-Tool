@@ -1,28 +1,26 @@
-HVAC Territory Discovery v0.9.7 — Deterministic Sales Scoring
+HVAC Territory Discovery v0.9.8 — Calibrated Sales Scoring
 
-ARCHITECTURE CHANGE
-GPT identifies visible equipment. Code, not GPT, sets a minimum sales-opportunity score from those observations.
+PURPOSE
+Calibrate deterministic scoring using:
+- 912 Birdneck as a positive control (large ground-mounted multi-fan chiller)
+- 589 Birdneck as a negative control (ordinary light-industrial building with small side-mounted packaged HVAC)
 
-WHY
-The exact 912 Birdneck image repeatedly produced a chiller-like observation but GPT downgraded the property because it could not prove a water loop. For prospecting, that is the wrong veto.
+CHANGES FROM v0.9.7
+1. POSSIBLE chiller/tower evidence can no longer create a GOOD score.
+2. A single PROBABLE chiller/tower view normally creates MAYBE, not GOOD.
+3. GOOD from deterministic rules requires stronger evidence:
+   - STRONG high-value equipment morphology, OR
+   - PROBABLE evidence repeated across views, OR
+   - PROBABLE evidence plus independent piping/mechanical-yard corroboration.
+4. Large packaged HVAC alone is capped at a MAYBE rule floor.
+5. Missing piping still never subtracts from a credible chiller/tower candidate.
+6. Vision instructions now emphasize physical scale using cars, parking stalls,
+   doors, roof curbs and building dimensions, and explicitly warn against
+   confusing small side-mounted packaged units with large chillers.
+7. Existing campus non-dilution behavior remains intact.
 
-RULES
-- Credible large air-cooled/process chiller morphology establishes a sales-score floor even without visible piping.
-- Cooling-tower/heat-rejection morphology does the same.
-- Strong/probable hydronic/process piping independently raises the floor.
-- Large packaged HVAC gets a smaller floor.
-- Piping corroborates high-value equipment but its absence never subtracts.
-- GPT's original synthesis score is retained as model_score for diagnostics.
-- Final building score = max(model_score, deterministic rule floor).
-- Campus non-dilution remains unchanged: best physical building cannot be diluted by poor/accessory buildings.
-
-UI DIAGNOSTIC
-After analysis, the building trace shows:
-B1: GOOD 68 [model 42, rule 68]
-This makes it clear whether the result came from GPT synthesis or the deterministic sales rules.
-
-FIRST REGRESSION SET
-1. 912 Birdneck — should be elevated if the detector again reports the large chiller-like anomaly.
-2. 717 General Booth — should remain GOOD.
-3. 949 Birdneck — should remain at least review-worthy if tower/heat-rejection evidence is detected.
-4. 589 Birdneck — should remain low/poor if it only shows ordinary light-industrial HVAC.
+FIRST TEST
+Run 912 Birdneck and 589 Birdneck before broader testing.
+Desired behavior:
+- 912: GOOD or strong MAYBE that clearly identifies the large chiller candidate.
+- 589: POOR/MAYBE, but NOT promoted to GOOD by the deterministic rule.
