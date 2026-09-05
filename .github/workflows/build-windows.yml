@@ -12,8 +12,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip && pip install -r requirements.txt
-      - run: pyinstaller --noconfirm --clean --onefile --windowed --name HVAC_Territory_Discovery_v097 app.py
+      - run: pyinstaller --noconfirm --clean --onefile --windowed --name HVAC_Territory_Discovery_v098 app.py
       - uses: actions/upload-artifact@v4
         with:
-          name: HVAC-Territory-Discovery-v097-Windows
-          path: dist/HVAC_Territory_Discovery_v097.exe
+          name: HVAC-Territory-Discovery-v098-Windows
+          path: dist/HVAC_Territory_Discovery_v098.exe
