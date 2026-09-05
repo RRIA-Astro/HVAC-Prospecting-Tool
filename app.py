@@ -11,7 +11,7 @@ AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/Ima
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.5"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.6"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -297,10 +297,14 @@ CONNECTION TRACING:
 - If piping reaches an ambiguous fan-topped object, RECONSIDER that object's identity using the connection.
 - Strong equipment-to-building paired water piping can support a chiller/process-cooling interpretation even when valves/flanges are indoors or obscured.
 
-AIR-COOLED / PROCESS CHILLERS:
-- Morphology alone is insufficient.
-- Large multi-fan equipment connected to a substantial paired/routed water circuit can be a chiller even without externally visible specialties.
-- Process chillers may look different from typical comfort-cooling chillers; connection evidence may be more diagnostic than cabinet shape.
+AIR-COOLED / PROCESS CHILLERS — PROSPECTING STANDARD:
+- This is a SALES-PROSPECT screen, not a requirement to prove equipment identity beyond doubt.
+- Strong chiller morphology is independently valuable evidence even when water piping cannot be traced from aerial imagery.
+- Look for large ground/pad-mounted or perimeter equipment with a long rectangular chassis, repeated axial condenser-fan array, finned heat-exchanger sections, substantial overall scale, and placement beside a commercial/institutional/process building.
+- A large multi-fan machine that is strongly consistent with an air-cooled chiller should be preserved as PROBABLE/POSSIBLE high-value equipment even if its hydronic connections disappear indoors, underground, under insulation, or are below image resolution.
+- Hydronic/process-water piping remains powerful corroboration and should raise confidence substantially when visible, but it is NOT a mandatory gate for a promising chiller-like machine.
+- Distinguish against ordinary condenser banks, VRF arrays, and packaged RTUs using scale, single-machine chassis continuity, fan-array organization, finned sections, pad/perimeter placement, roof-curb/duct evidence, and visible connections.
+- Process chillers may look different from typical comfort-cooling chillers; morphology and connection evidence should be combined rather than requiring either one alone.
 
 PACKAGED RTU / AHU:
 - Favor packaged DX when cabinet/curb/duct morphology is present, especially with a small condensate drain and no substantial water circuit.
@@ -327,17 +331,24 @@ Do NOT require visible valves/flanges for hydronic/process-water piping. Strong 
 DX RULE:
 Small simple PVC condensate drainage is positive DX evidence and MUST NOT create central-plant evidence. Large paired complex routed piping is fundamentally different.
 
-TRACE BEFORE CLASSIFYING:
+MORPHOLOGY + CONNECTIONS BEFORE CLASSIFYING:
+- Evaluate high-value equipment using TWO independent evidence channels: (A) equipment morphology/scale/location and (B) connection/piping evidence.
+- Strong evidence from BOTH channels gives high confidence.
+- Strong chiller-like morphology alone can still justify a GOOD or upper-MAYBE SALES PROSPECT when piping is hidden, buried, indoors, obscured, or below image resolution.
+- Strong traceable hydronic/process-water connections can likewise elevate an ambiguous machine.
 - If any crop reports credible substantial or complex piping, use the reported endpoints and geometry to reconsider connected equipment.
 - Large fan-topped equipment connected by a substantial paired routed circuit to a building/penthouse may be an air-cooled or process chiller despite atypical morphology.
 - Tower-like/fan-array equipment connected to substantial condenser/process-water piping may be cooling-tower/heat-rejection equipment even if screened, low-profile, enclosed, or nonstandard.
-- If strong piping evidence exists but equipment identity remains uncertain, preserve the property as a high-value prospect rather than automatically collapsing it to packaged DX.
+- Do not collapse a visually compelling large chiller candidate to ordinary packaged DX solely because the water circuit cannot be proven from overhead imagery.
 
 PACKAGED DX CHECK:
 Favor packaged RTU/AHU when cabinet/curb/duct evidence exists AND no substantial water circuit connects to the unit. A small condensate drain supports DX. Mechanical complexity alone does NOT establish a central plant.
 
-SCORING:
+SCORING — SALES-PROSPECT OBJECTIVE:
+- Score whether a salesperson should investigate the property, NOT whether the aerial image proves a complete central-plant schematic.
 - Confirmed/probable chiller, cooling tower, or strong traceable pumped central/process-water circuit should materially raise prospect score.
+- A visually compelling LARGE air-cooled/process-chiller candidate may independently support GOOD/upper-MAYBE even without confirmed piping, because human review is the intended next step.
+- Strong morphology + strong connection evidence should score higher than morphology alone.
 - A credible unresolved large chiller/tower candidate with strong connection evidence should generally keep the property GOOD or upper-MAYBE for human review.
 - Genuinely large packaged RTUs can be worthwhile.
 - Numerous small packaged units alone are weak.
@@ -440,7 +451,7 @@ def deep_run_campus(key,z,root,progress):
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.5 — Non-Diluting Campus");r.geometry("1600x880")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.6 — Prospect-Oriented Chiller Recognition");r.geometry("1600x880")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach test center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)
