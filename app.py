@@ -309,6 +309,9 @@ AIR-COOLED / PROCESS CHILLERS — PROSPECTING STANDARD:
 PACKAGED RTU / AHU:
 - Favor packaged DX when cabinet/curb/duct morphology is present, especially with a small condensate drain and no substantial water circuit.
 - Do not classify prominent exhaust, make-up-air, kitchen-hood, or ventilation equipment as a large RTU solely because it is physically large.
+- SCALE IS MANDATORY before calling packaged equipment LARGE. Compare the candidate with cars, parking stalls, doors, roof curbs, sidewalks, and the building footprint. If scale is uncertain, classify it as small_packaged_hvac or condenser rather than large_packaged_hvac.
+- Small residential/light-commercial split condensers, mini-split outdoor units, unitary sidewall condensers, and small packaged units are LOW-VALUE for this sales screen. Several of them do not become a large commercial HVAC opportunity merely through quantity.
+- Roof vents, skylights, exhaust fans, plumbing vents, small hoods, curbs and shadows are not large HVAC equipment.
 
 COOLING TOWERS / HEAT REJECTION:
 - Search for conventional towers AND screened, partly enclosed, low-profile, closed-circuit, evaporative, induced-draft, and process heat-rejection equipment.
@@ -350,8 +353,9 @@ SCORING — SALES-PROSPECT OBJECTIVE:
 - A visually compelling LARGE air-cooled/process-chiller candidate may independently support GOOD/upper-MAYBE even without confirmed piping, because human review is the intended next step.
 - Strong morphology + strong connection evidence should score higher than morphology alone.
 - A credible unresolved large chiller/tower candidate with strong connection evidence should generally keep the property GOOD or upper-MAYBE for human review.
-- Genuinely large packaged RTUs can be worthwhile.
-- Numerous small packaged units alone are weak.
+- Genuinely large packaged RTUs can be worthwhile, but LARGE must be supported by visible scale relative to cars/parking stalls/doors/building dimensions.
+- Numerous small packaged units, residential-style condensers, mini-splits, vents, exhaust fans or skylights alone are a POOR sales prospect. Quantity of low-value equipment must NOT manufacture a MAYBE or GOOD rating.
+- If the property shows only local/residential/light-commercial HVAC with no credible large packaged unit, chiller, tower, substantial process/hydronic piping, or meaningful mechanical yard, score it POOR (generally below 40).
 - Not_observed is not proof of absence.
 
 In central_system_evidence and summary, explicitly explain the evidence chain, for example: substantial paired piping + multiple routed turns + equipment-to-building termination -> probable pumped hydronic/process-water circuit. Do not infer property identity or building type."""
@@ -406,126 +410,95 @@ def _best_signal(obs, field):
 
 def deterministic_sales_score(obs, model_result):
     """
-    v0.9.8 conservative deterministic scoring.
+    v0.9.9 high-recall scoring with a low-value-only safeguard.
 
-    912 Birdneck is the positive control: a genuinely large, multi-fan,
-    ground-mounted chiller candidate must be able to surface even when piping
-    cannot be proven.
-
-    589 Birdneck is the negative control: an ordinary small side-mounted
-    packaged unit / weak large-equipment hallucination must NOT become GOOD.
-
-    Core rule: weak morphology alone can request REVIEW, but cannot create GOOD.
+    High-value central/process evidence remains asymmetric: credible chillers,
+    towers and pumped-water evidence can lift a prospect. But repeated small
+    condensers / small packaged equipment cannot accumulate into a false
+    commercial opportunity.
     """
     ch=_best_signal(obs,"air_cooled_chillers")
     tw=_best_signal(obs,"cooling_towers")
     pp=_best_signal(obs,"piping")
     lg=_best_signal(obs,"large_packaged_hvac")
+    sm=_best_signal(obs,"small_packaged_hvac")
+    co=_best_signal(obs,"condensers")
     my=_best_signal(obs,"mechanical_yard")
 
     raw=int(model_result.get("score",0) or 0)
-    floors=[]
-    reasons=[]
+    floors=[]; reasons=[]
 
-    def corroborated(sig):
-        # Independent visual corroboration. Absence never subtracts.
-        return (
-            pp["status"] in ("probable","strong") or
-            my["status"] in ("probable","strong")
-        )
+    def corroborated():
+        return pp["status"] in ("probable","strong") or my["status"] in ("probable","strong")
 
     def high_value_floor(sig,name):
         st,cf,n=sig["status"],sig["confidence"],sig["views"]
-        cor=corroborated(sig)
-
+        cor=corroborated()
         if st=="strong":
-            # Strong high-value equipment can stand on morphology alone.
             val=78
             if cf>=80: val=84
             if n>=2: val+=4
-            floors.append(min(94,val))
-            reasons.append(f"{name} strong {cf}% in {n} view(s)")
-            return
-
+            floors.append(min(94,val)); reasons.append(f"{name} strong {cf}% in {n} view(s)"); return
         if st=="probable":
-            # One probable view is review-worthy, not automatically GOOD.
-            # Multiple views or independent process/hydronic-yard evidence
-            # are required for a GOOD deterministic floor.
             if n>=2 or cor:
-                val=68
-                if cf>=70: val+=5
-                if n>=3: val+=4
+                val=68 + (5 if cf>=70 else 0) + (4 if n>=3 else 0)
             else:
                 val=58 if cf>=60 else 54
-            floors.append(min(90,val))
-            reasons.append(
-                f"{name} probable {cf}% in {n} view(s)"
-                + (" with corroboration" if cor else "")
-            )
-            return
-
+            floors.append(min(90,val)); reasons.append(f"{name} probable {cf}% in {n} view(s)"+(" with corroboration" if cor else "")); return
         if st=="possible":
-            # This is the key 589 safeguard. "Possible" is never enough to
-            # manufacture GOOD. Repetition/corroboration can only create MAYBE.
-            if n>=3 and cor:
-                val=58
-            elif n>=2 or cor:
-                val=52
-            else:
-                val=0
-            if val:
-                floors.append(val)
-                reasons.append(
-                    f"{name} possible {cf}% in {n} view(s)"
-                    + (" with corroboration" if cor else "")
-                )
+            # Possible morphology is review evidence only; never GOOD by itself.
+            val=58 if n>=3 and cor else 52 if (n>=2 or cor) else 0
+            if val: floors.append(val); reasons.append(f"{name} possible {cf}% in {n} view(s)"+(" with corroboration" if cor else ""))
 
     high_value_floor(ch,"air-cooled/process chiller")
     high_value_floor(tw,"cooling tower/heat rejection")
 
-    # Piping is independently useful, but weak piping is not a substitute
-    # for actual high-value equipment.
-    if pp["status"]=="strong":
-        floors.append(70)
-        reasons.append(f"piping strong {pp['confidence']}%")
-    elif pp["status"]=="probable":
-        floors.append(60)
-        reasons.append(f"piping probable {pp['confidence']}%")
+    if pp["status"]=="strong": floors.append(70); reasons.append(f"piping strong {pp['confidence']}%")
+    elif pp["status"]=="probable": floors.append(60); reasons.append(f"piping probable {pp['confidence']}%")
 
-    # Large packaged HVAC alone is a MAYBE signal. Never create GOOD.
-    if lg["status"]=="strong":
-        floors.append(58)
-        reasons.append(f"large packaged HVAC strong {lg['confidence']}%")
-    elif lg["status"]=="probable":
-        floors.append(52)
-        reasons.append(f"large packaged HVAC probable {lg['confidence']}%")
+    # Large packaged HVAC is useful only when the visual evidence is repeated
+    # enough to support actual scale. It can create MAYBE, never GOOD.
+    if lg["status"]=="strong" and lg["confidence"]>=70 and lg["views"]>=2:
+        floors.append(56); reasons.append(f"large packaged HVAC strong/scale-supported {lg['confidence']}% in {lg['views']} views")
+    elif lg["status"]=="strong":
+        floors.append(48); reasons.append("large packaged HVAC strong but scale/repetition limited")
+    elif lg["status"]=="probable" and lg["confidence"]>=60 and lg["views"]>=2:
+        floors.append(48); reasons.append(f"large packaged HVAC probable across {lg['views']} views")
     elif lg["status"]=="possible" and lg["views"]>=3:
-        floors.append(46)
-        reasons.append(f"large packaged HVAC possible across {lg['views']} views")
+        floors.append(44); reasons.append(f"large packaged HVAC possible across {lg['views']} views")
 
-    # Multiple INDEPENDENT high-value channels can strengthen the floor.
-    # Do not count packaged HVAC here.
-    independent=sum(
-        1 for s in (ch,tw,pp)
-        if s["status"] in ("probable","strong")
-    )
+    independent=sum(1 for q in (ch,tw,pp) if q["status"] in ("probable","strong"))
     floor=max(floors) if floors else 0
-    if independent>=2 and floor>=60:
-        floor=min(94,floor+5)
+    if independent>=2 and floor>=60: floor=min(94,floor+5)
 
-    # Deterministic logic is a floor, not a penalty. It cannot lower GPT.
-    final=max(raw,floor)
+    # LOW-VALUE-ONLY SAFEGUARD. This is deliberately a narrow exception to
+    # the usual floor-only philosophy. If the evidence is dominated by small
+    # local equipment and there is no credible high-value channel, GPT cannot
+    # turn quantity/ambiguity into a 50-60 point campus prospect.
+    credible_central = any(q["status"] in ("probable","strong") for q in (ch,tw,pp))
+    credible_yard = my["status"] in ("probable","strong") and my["confidence"]>=65
+    credible_large = (
+        lg["status"]=="strong" and lg["confidence"]>=75 and lg["views"]>=3
+    ) or (
+        lg["status"]=="probable" and lg["confidence"]>=70 and lg["views"]>=3 and credible_yard
+    )
+    local_hvac = (sm["status"] in ("probable","strong") or co["status"] in ("probable","strong"))
+    low_value_only = local_hvac and not credible_central and not credible_yard and not credible_large
+
+    adjusted_raw=raw
+    if low_value_only:
+        adjusted_raw=min(adjusted_raw,39)
+        floor=min(floor,39)
+        reasons.append("low-value-only safeguard: small/local HVAC cannot accumulate into MAYBE")
+
+    final=max(adjusted_raw,floor)
     cls="GOOD" if final>=65 else "MAYBE" if final>=40 else "POOR"
-
     return final,cls,{
-        "model_score":raw,
-        "rule_floor":floor,
-        "air_cooled_chiller":ch,
-        "cooling_tower":tw,
-        "piping":pp,
-        "large_packaged_hvac":lg,
-        "mechanical_yard":my,
-        "reasons":reasons
+        "model_score":raw,"adjusted_model_score":adjusted_raw,"rule_floor":floor,
+        "low_value_only":low_value_only,
+        "air_cooled_chiller":ch,"cooling_tower":tw,"piping":pp,
+        "large_packaged_hvac":lg,"small_packaged_hvac":sm,"condensers":co,
+        "mechanical_yard":my,"reasons":reasons
     }
 
 
@@ -563,7 +536,8 @@ Each physical building was independently analyzed by the frozen v0.6.6 Connectio
 NON-DILUTION RULE — MANDATORY:
 - Anchor the campus to the BEST physical-building opportunity.
 - A POOR or mediocre building can NEVER reduce/dilute the score or class earned by a stronger building.
-- Additional MAYBE/GOOD buildings may INCREASE the campus opportunity because they add service scope.
+- Additional GOOD buildings may INCREASE the campus opportunity because they add real service scope. A MAYBE may add only a small bonus when it contains credible high-value mechanical evidence.
+- Multiple weak MAYBE buildings must NEVER accumulate into a stronger campus merely because there are several of them. Three weak buildings are still a weak campus.
 - One GOOD physical building means the campus is GOOD.
 - Think MAXIMUM + POSITIVE ADDITIONS, never averaging.
 
@@ -604,14 +578,20 @@ def deep_run_campus(key,z,root,progress):
         if rank.get(best_class,0)>rank.get(final.get("class","POOR"),0):
             final["class"]=best_class
         final["best_building"]=best["building"]
-        # Other non-poor physical buildings are positive scope, never negative evidence.
+        # v0.9.9: weak MAYBEs do not accumulate. Campus may exceed the best
+        # building only when another building is independently GOOD.
+        other_good=[x for x in physical if x["building"]!=best["building"] and x["result"].get("class")=="GOOD"]
+        max_bonus=min(6,2*len(other_good))
+        final["score"]=min(final["score"],best_score+max_bonus)
+        final["score"]=max(final["score"],best_score)
+        final["class"]="GOOD" if final["score"]>=65 else "MAYBE" if final["score"]>=40 else "POOR"
         positive=[x["building"] for x in physical if x["result"].get("class") in ("GOOD","MAYBE")]
         final["high_value_buildings"]=sorted(set(final.get("high_value_buildings",[])+positive))
     return final,results,use,errors,imgs
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.8 — Calibrated Sales Scoring");r.geometry("1600x880")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.9 — Low-Value Suppression");r.geometry("1600x880")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach test center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)

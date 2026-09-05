@@ -1,4 +1,4 @@
-HVAC Territory Discovery v0.9.8 — Calibrated Sales Scoring
+HVAC Territory Discovery v0.9.9 — Calibrated Sales Scoring
 
 PURPOSE
 Calibrate deterministic scoring using:
@@ -24,3 +24,6 @@ Run 912 Birdneck and 589 Birdneck before broader testing.
 Desired behavior:
 - 912: GOOD or strong MAYBE that clearly identifies the large chiller candidate.
 - 589: POOR/MAYBE, but NOT promoted to GOOD by the deterministic rule.
+
+
+v0.9.9 calibration: suppresses low-value-only small/local HVAC false positives; weak MAYBE buildings no longer accumulate into a stronger campus. High-value chiller/tower/process evidence remains recall-biased.
