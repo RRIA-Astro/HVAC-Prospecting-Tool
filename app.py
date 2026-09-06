@@ -11,7 +11,7 @@ AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/Ima
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.9.8"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.10.0"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -253,557 +253,317 @@ def campus_images(z,root):
         paths.append((f"BUILDING {i} — {int(b.get('sq',0)):,} ft2",str(q),b))
     return paths
 
-# ---------------- Deep Vision v0.6.6 Connection Tracing engine ----------------
-from PIL import Image
-from openai import OpenAI
-MODEL="gpt-5.4-mini"
-OBS={"type":"object","additionalProperties":False,"properties":{k:{"type":"object","additionalProperties":False,
-"properties":{"status":{"type":"string","enum":["strong","probable","possible","not_observed"]},
-"quantity":{"type":"string","enum":["none","one","few","several","many","unknown"]},
-"confidence":{"type":"integer"},"evidence":{"type":"string"}},
-"required":["status","quantity","confidence","evidence"]} for k in
-["cooling_towers","air_cooled_chillers","large_packaged_hvac","small_packaged_hvac","condensers","piping","mechanical_yard"]},
-"required":["cooling_towers","air_cooled_chillers","large_packaged_hvac","small_packaged_hvac","condensers","piping","mechanical_yard"]}
-FINAL={"type":"object","additionalProperties":False,"properties":{
-"class":{"type":"string","enum":["GOOD","MAYBE","POOR"]},"score":{"type":"integer"},"confidence":{"type":"integer"},
-"cooling_towers":{"type":"string"},"air_cooled_chillers":{"type":"string"},"large_packaged_hvac":{"type":"string"},
-"small_packaged_hvac":{"type":"string"},"piping":{"type":"string"},"central_system_evidence":{"type":"string"},
-"ambiguities":{"type":"array","items":{"type":"string"}},"summary":{"type":"string"}},
-"required":["class","score","confidence","cooling_towers","air_cooled_chillers","large_packaged_hvac","small_packaged_hvac",
-"piping","central_system_evidence","ambiguities","summary"]}
+# ---------------- Human Review + Training Dataset ----------------
+import csv,os,zipfile
+from datetime import datetime,timezone
+from PIL import Image,ImageTk
 
-IP="""BLIND COMMERCIAL HVAC FORENSIC AERIAL INSPECTION. Inspect ALL visible roof AND ground/perimeter areas.
-
-Identify candidate equipment AND trace visible piping to discriminate equipment types.
-
-HYDRONIC / PROCESS-WATER PIPING uses WEIGHTED evidence. Valves/flanges are NOT required. Strong clues include:
-- substantial diameter relative to condensate/drain piping;
-- paired supply/return-style runs;
-- multiple 90-degree turns or complex purposeful routing;
-- elevation changes/supports;
-- direct equipment-to-building or equipment-to-penthouse termination;
-- insulation;
-- valves, flanges, headers, strainers, gauges, pumps and fittings WHEN visible.
-White pipe is not automatically PVC. Large insulated white piping can be hydronic/process-water piping.
-
-CONDENSATE / DX:
-- A small PVC condensate drain is POSITIVE evidence for direct-expansion packaged HVAC and AGAINST interpreting that unit as an air-cooled water chiller.
-- Condensate drainage is generally small and comparatively simple/gravity-routed.
-- Do not confuse a drain with a substantial paired circuit having multiple turns and purposeful routing.
-
-CONNECTION TRACING:
-- Whenever credible substantial or complex piping is visible, trace it in BOTH directions as far as the view permits.
-- Determine whether it appears equipment-to-building, equipment-to-penthouse, equipment-to-equipment, or unresolved.
-- If piping reaches an ambiguous fan-topped object, RECONSIDER that object's identity using the connection.
-- Strong equipment-to-building paired water piping can support a chiller/process-cooling interpretation even when valves/flanges are indoors or obscured.
-
-AIR-COOLED / PROCESS CHILLERS — PROSPECTING STANDARD:
-- This is a SALES-PROSPECT screen, not a requirement to prove equipment identity beyond doubt.
-- Strong chiller morphology is independently valuable evidence even when water piping cannot be traced from aerial imagery.
-- Look for large ground/pad-mounted or perimeter equipment with a long rectangular chassis, repeated axial condenser-fan array, finned heat-exchanger sections, substantial overall scale, and placement beside a commercial/institutional/process building.
-- A large multi-fan machine that is strongly consistent with an air-cooled chiller should be preserved as PROBABLE/POSSIBLE high-value equipment even if its hydronic connections disappear indoors, underground, under insulation, or are below image resolution.
-- Hydronic/process-water piping remains powerful corroboration and should raise confidence substantially when visible, but it is NOT a mandatory gate for a promising chiller-like machine.
-- Distinguish against ordinary condenser banks, VRF arrays, and packaged RTUs using scale, single-machine chassis continuity, fan-array organization, finned sections, pad/perimeter placement, roof-curb/duct evidence, and visible connections.
-- Process chillers may look different from typical comfort-cooling chillers; morphology and connection evidence should be combined rather than requiring either one alone.
-
-PACKAGED RTU / AHU:
-- Favor packaged DX when cabinet/curb/duct morphology is present, especially with a small condensate drain and no substantial water circuit.
-- Do not classify prominent exhaust, make-up-air, kitchen-hood, or ventilation equipment as a large RTU solely because it is physically large.
-- SCALE IS MANDATORY before calling packaged equipment LARGE. Compare the candidate with cars, parking stalls, doors, roof curbs, sidewalks, and the building footprint. If scale is uncertain, classify it as small_packaged_hvac or condenser rather than large_packaged_hvac.
-- Small residential/light-commercial split condensers, mini-split outdoor units, unitary sidewall condensers, and small packaged units are LOW-VALUE for this sales screen. Several of them do not become a large commercial HVAC opportunity merely through quantity.
-- Roof vents, skylights, exhaust fans, plumbing vents, small hoods, curbs and shadows are not large HVAC equipment.
-
-COOLING TOWERS / HEAT REJECTION:
-- Search for conventional towers AND screened, partly enclosed, low-profile, closed-circuit, evaporative, induced-draft, and process heat-rejection equipment.
-- Do not require a visible plume.
-- Atypical fan-array/tower morphology PLUS substantial condenser/process-water piping is meaningful combined evidence.
-- If credible large water piping terminates at a tower-like/fan-array object, raise heat-rejection probability even if the form factor is unfamiliar.
-
-CENTRAL SYSTEM CAUTION:
-- Mechanical complexity alone does NOT establish a central plant.
-- Generic conduit, roof drains, seams, rails, shadows, gas piping, or isolated lines do NOT establish hydronic piping.
-- Conversely, do not reject a central system merely because valves/flanges are not visible when pipe size, pairing, routing geometry, and termination strongly support a pumped water circuit.
-
-Do not infer address, occupant, company, or building type. Use not_observed rather than claiming absence from one crop. Use quantity bands, not exact counts. Preserve plausible high-value equipment for synthesis."""
-
-SP="""Synthesize the independent overlapping observations from ONE property and deduplicate them. Use HVAC forensic CONNECTION EVIDENCE.
-
-WEIGHTED PIPING RULE:
-Do NOT require visible valves/flanges for hydronic/process-water piping. Strong evidence can arise from substantial diameter + paired runs + multiple 90-degree turns/complex routing + direct equipment-to-building/penthouse termination. Insulation, valves, flanges, headers, pumps and fittings strengthen the conclusion but are not mandatory. White pipe is not automatically PVC.
-
-DX RULE:
-Small simple PVC condensate drainage is positive DX evidence and MUST NOT create central-plant evidence. Large paired complex routed piping is fundamentally different.
-
-MORPHOLOGY + CONNECTIONS BEFORE CLASSIFYING:
-- Evaluate high-value equipment using TWO independent evidence channels: (A) equipment morphology/scale/location and (B) connection/piping evidence.
-- Strong evidence from BOTH channels gives high confidence.
-- Strong chiller-like morphology alone can still justify a GOOD or upper-MAYBE SALES PROSPECT when piping is hidden, buried, indoors, obscured, or below image resolution.
-- Strong traceable hydronic/process-water connections can likewise elevate an ambiguous machine.
-- If any crop reports credible substantial or complex piping, use the reported endpoints and geometry to reconsider connected equipment.
-- Large fan-topped equipment connected by a substantial paired routed circuit to a building/penthouse may be an air-cooled or process chiller despite atypical morphology.
-- Tower-like/fan-array equipment connected to substantial condenser/process-water piping may be cooling-tower/heat-rejection equipment even if screened, low-profile, enclosed, or nonstandard.
-- Do not collapse a visually compelling large chiller candidate to ordinary packaged DX solely because the water circuit cannot be proven from overhead imagery.
-
-PACKAGED DX CHECK:
-Favor packaged RTU/AHU when cabinet/curb/duct evidence exists AND no substantial water circuit connects to the unit. A small condensate drain supports DX. Mechanical complexity alone does NOT establish a central plant.
-
-SCORING — SALES-PROSPECT OBJECTIVE:
-- Score whether a salesperson should investigate the property, NOT whether the aerial image proves a complete central-plant schematic.
-- Confirmed/probable chiller, cooling tower, or strong traceable pumped central/process-water circuit should materially raise prospect score.
-- A visually compelling LARGE air-cooled/process-chiller candidate may independently support GOOD/upper-MAYBE even without confirmed piping, because human review is the intended next step.
-- Strong morphology + strong connection evidence should score higher than morphology alone.
-- A credible unresolved large chiller/tower candidate with strong connection evidence should generally keep the property GOOD or upper-MAYBE for human review.
-- Genuinely large packaged RTUs can be worthwhile, but LARGE must be supported by visible scale relative to cars/parking stalls/doors/building dimensions.
-- Numerous small packaged units, residential-style condensers, mini-splits, vents, exhaust fans or skylights alone are a POOR sales prospect. Quantity of low-value equipment must NOT manufacture a MAYBE or GOOD rating.
-- If the property shows only local/residential/light-commercial HVAC with no credible large packaged unit, chiller, tower, substantial process/hydronic piping, or meaningful mechanical yard, score it POOR (generally below 40).
-- Not_observed is not proof of absence.
-
-In central_system_evidence and summary, explicitly explain the evidence chain, for example: substantial paired piping + multiple routed turns + equipment-to-building termination -> probable pumped hydronic/process-water circuit. Do not infer property identity or building type."""
-
-def dv_url(p):
-    return "data:image/jpeg;base64,"+base64.b64encode(Path(p).read_bytes()).decode()
-def dv_ask(c,prompt,content,schema,name,tok=5000,effort="low"):
-    last=None
-    for attempt in range(2):
-        budget=tok if attempt==0 else max(tok,8000)
-        r=c.responses.create(model=MODEL,reasoning={"effort":effort},
-          input=[{"role":"user","content":[{"type":"input_text","text":prompt}]+content}],
-          text={"format":{"type":"json_schema","name":name,"strict":True,"schema":schema},"verbosity":"low"},
-          max_output_tokens=budget)
-        last=r
-        if r.status=="completed" and (r.output_text or "").strip():return json.loads(r.output_text),r
-        reason=getattr(getattr(r,"incomplete_details",None),"reason",None)
-        if attempt==0 and reason=="max_output_tokens":continue
-        raise RuntimeError(f"response {r.status}: {getattr(r,'incomplete_details',None)}")
-    raise RuntimeError(f"No usable response: {getattr(last,'status',None)}")
-def dv_crops(path):
-    im=Image.open(path).convert("RGB");w,h=im.size
-    d=Path(tempfile.gettempdir())/("hvac_dv_"+Path(path).stem);d.mkdir(exist_ok=True)
-    out=[("overview",str(path))];tw,th=int(w*.5),int(h*.5);n=0
-    for cy in (.25,.5,.75):
-        for cx in (.25,.5,.75):
-            x=max(0,min(w-tw,int(w*cx-tw/2)));y=max(0,min(h-th,int(h*cy-th/2)));n+=1
-            p=d/f"crop_{n}.jpg";im.crop((x,y,x+tw,y+th)).save(p,quality=96)
-            out.append((f"crop {n}",str(p)))
-    return out
-
-STATUS_RANK={"not_observed":0,"possible":1,"probable":2,"strong":3}
-
-def _best_signal(obs, field):
-    """Return strongest repeated visual signal for one equipment family."""
-    hits=[]
-    for item in obs:
-        try:
-            d=item["observations"][field]
-            st=d.get("status","not_observed")
-            cf=int(d.get("confidence",0) or 0)
-            if st!="not_observed":
-                hits.append((STATUS_RANK.get(st,0),cf,item.get("view",""),d.get("evidence","")))
-        except Exception:
-            pass
-    hits.sort(reverse=True)
-    if not hits:
-        return {"status":"not_observed","confidence":0,"views":0,"strong_views":0,"probable_views":0,"best_view":"","evidence":""}
-    rank,conf,view,evidence=hits[0]
-    status={1:"possible",2:"probable",3:"strong"}.get(rank,"not_observed")
-    strong_views=sum(1 for r,_,_,_ in hits if r>=3)
-    probable_views=sum(1 for r,_,_,_ in hits if r>=2)
-    return {"status":status,"confidence":conf,"views":len(hits),"strong_views":strong_views,"probable_views":probable_views,"best_view":view,"evidence":evidence}
-
-def deterministic_sales_score(obs, model_result):
-    """
-    v0.9.11 rule-engine correction.
-
-    GOOD requires a qualified high-value anchor. Weak/ambiguous mechanical
-    evidence may remain MAYBE for human review, but the deterministic layer
-    may not manufacture GOOD from a probable equipment guess plus generic
-    mechanical-yard clutter. This is intentionally asymmetric: uncertain
-    prospects are retained, while GOOD is reserved for credible central/process
-    equipment or a genuinely strong water-system signal.
-    """
-    ch=_best_signal(obs,"air_cooled_chillers")
-    tw=_best_signal(obs,"cooling_towers")
-    pp=_best_signal(obs,"piping")
-    lg=_best_signal(obs,"large_packaged_hvac")
-    sm=_best_signal(obs,"small_packaged_hvac")
-    co=_best_signal(obs,"condensers")
-    my=_best_signal(obs,"mechanical_yard")
-
-    raw=int(model_result.get("score",0) or 0)
-    floors=[]; reasons=[]
-
-    # A generic mechanical yard is useful context but is NOT enough to turn a
-    # one-view probable chiller/tower guess into GOOD. Water piping is much more
-    # diagnostic and is allowed to corroborate it.
-    piping_corroboration = pp["status"] in ("probable","strong")
-
-    def qualified_equipment(sig):
-        if sig["status"]=="strong" and sig["confidence"]>=65:
-            return True
-        if sig["status"]=="probable":
-            # Repetition must be repetition at PROBABLE-or-better, not merely
-            # several POSSIBLE mentions in overlapping crops.
-            if sig.get("probable_views",0)>=2 and sig["confidence"]>=60:
-                return True
-            if piping_corroboration and sig["confidence"]>=60:
-                return True
-        return False
-
-    qualified_chiller=qualified_equipment(ch)
-    qualified_tower=qualified_equipment(tw)
-    qualified_water = pp["status"]=="strong" and pp["confidence"]>=70
-    qualified_anchor = qualified_chiller or qualified_tower or qualified_water
-
-    def high_value_floor(sig,name,qualified):
-        st,cf=sig["status"],sig["confidence"]
-        pv=sig.get("probable_views",0)
-        if qualified:
-            if st=="strong":
-                val=78 + (6 if cf>=80 else 0) + (4 if sig.get("strong_views",0)>=2 else 0)
-            else:
-                val=68 + (5 if cf>=70 else 0) + (4 if pv>=3 else 0)
-            floors.append(min(94,val)); reasons.append(f"qualified {name} {st} {cf}% ({pv} probable+ views)")
-            return
-        # Unresolved morphology stays visible for review but cannot create GOOD.
-        if st=="probable":
-            val=58 if cf>=60 else 54
-            floors.append(val); reasons.append(f"unconfirmed {name} probable {cf}% ({pv} probable+ views)")
-        elif st=="possible" and (sig["views"]>=2 or piping_corroboration):
-            val=52 if sig["views"]>=2 else 48
-            floors.append(val); reasons.append(f"unconfirmed {name} possible {cf}%")
-
-    high_value_floor(ch,"air-cooled/process chiller",qualified_chiller)
-    high_value_floor(tw,"cooling tower/heat rejection",qualified_tower)
-
-    if qualified_water:
-        floors.append(70); reasons.append(f"qualified strong water/process piping {pp['confidence']}%")
-    elif pp["status"]=="strong":
-        floors.append(60); reasons.append(f"strong but not fully qualified piping {pp['confidence']}%")
-    elif pp["status"]=="probable":
-        floors.append(56); reasons.append(f"probable piping {pp['confidence']}%")
-
-    # Large packaged HVAC can justify review but cannot by itself create GOOD.
-    if lg["status"]=="strong" and lg["confidence"]>=70 and lg.get("strong_views",0)>=2:
-        floors.append(56); reasons.append("scale-supported large packaged HVAC")
-    elif lg["status"] in ("strong","probable"):
-        floors.append(48); reasons.append("large packaged HVAC without central/process anchor")
-    elif lg["status"]=="possible" and lg["views"]>=3:
-        floors.append(44); reasons.append("possible large packaged HVAC")
-
-    floor=max(floors) if floors else 0
-    if sum((qualified_chiller,qualified_tower,qualified_water))>=2 and floor>=60:
-        floor=min(94,floor+5)
-
-    local_hvac=(sm["status"] in ("probable","strong") or co["status"] in ("probable","strong"))
-    credible_yard=my["status"] in ("probable","strong") and my["confidence"]>=65
-    credible_large=(lg["status"]=="strong" and lg["confidence"]>=75 and lg.get("strong_views",0)>=2)
-    low_value_only=local_hvac and not qualified_anchor and not credible_large and not credible_yard and ch["status"] not in ("probable","strong") and tw["status"] not in ("probable","strong")
-
-    adjusted_raw=raw
-    if low_value_only:
-        adjusted_raw=min(adjusted_raw,39); floor=min(floor,39)
-        reasons.append("low-value-only safeguard")
-    elif not qualified_anchor:
-        # Critical v0.9.11 guardrail: GPT may call an ambiguous site GOOD, but
-        # without a qualified central/process anchor it remains a human-review
-        # MAYBE. This preserves recall without labeling ordinary sites GOOD.
-        adjusted_raw=min(adjusted_raw,62); floor=min(floor,62)
-        reasons.append("GOOD guardrail: no qualified central/process anchor")
-
-    final=max(adjusted_raw,floor)
-    cls="GOOD" if final>=65 else "MAYBE" if final>=40 else "POOR"
-    return final,cls,{
-        "model_score":raw,"adjusted_model_score":adjusted_raw,"rule_floor":floor,
-        "qualified_anchor":qualified_anchor,"qualified_chiller":qualified_chiller,
-        "qualified_tower":qualified_tower,"qualified_water":qualified_water,
-        "low_value_only":low_value_only,
-        "air_cooled_chiller":ch,"cooling_tower":tw,"piping":pp,
-        "large_packaged_hvac":lg,"small_packaged_hvac":sm,"condensers":co,
-        "mechanical_yard":my,"reasons":reasons
-    }
+APP_VERSION="0.10.0"
+DATASET_NAME="HVAC_Training_Dataset"
+EQUIPMENT_CLASSES=[
+    ("cooling_tower","Cooling tower / fluid cooler / evaporative heat rejection"),
+    ("air_cooled_chiller","Air-cooled / process chiller"),
+    ("large_packaged_hvac","Genuinely large packaged RTU / AHU"),
+    ("process_hydronic_piping","Substantial hydronic / process piping"),
+    ("mechanical_yard_process","Mechanical yard / process-cooling area"),
+    ("other_high_value_mechanical","Other clearly high-value mechanical equipment"),
+]
+CLASS_IDS={k:i for i,(k,_) in enumerate(EQUIPMENT_CLASSES)}
 
 
-
-TRIAGE_RANK={"LOW":0,"REVIEW":1,"HIGH":2}
-
-def equipment_breakdown(obs):
-    """Preserve what Deep Vision actually thinks it sees, independent of the sales score."""
-    return {
-        "air_cooled_chiller": _best_signal(obs,"air_cooled_chillers"),
-        "cooling_tower": _best_signal(obs,"cooling_towers"),
-        "large_packaged_hvac": _best_signal(obs,"large_packaged_hvac"),
-        "small_packaged_hvac": _best_signal(obs,"small_packaged_hvac"),
-        "condensers": _best_signal(obs,"condensers"),
-        "piping": _best_signal(obs,"piping"),
-        "mechanical_yard": _best_signal(obs,"mechanical_yard"),
-    }
-
-def sales_triage(bd):
-    """
-    Equipment-first sales triage.
-    HIGH = strong evidence of genuinely high-value central/process equipment.
-    REVIEW = credible anomaly / ambiguous higher-value equipment worth a human look.
-    LOW = only ordinary/local HVAC or no meaningful high-value signal.
-
-    This intentionally does NOT use the opaque 0-100 score.
-    """
-    ch=bd["air_cooled_chiller"]; tw=bd["cooling_tower"]; pp=bd["piping"]
-    lg=bd["large_packaged_hvac"]; my=bd["mechanical_yard"]
-
-    reasons=[]
-
-    # HIGH: strong morphology, repeated probable evidence, or strong process-water evidence.
-    if ch["status"]=="strong" and ch["confidence"]>=65:
-        reasons.append(f"strong chiller signal {ch['confidence']}%")
-    if tw["status"]=="strong" and tw["confidence"]>=65:
-        reasons.append(f"strong tower/heat-rejection signal {tw['confidence']}%")
-    if ch.get("probable_views",0)>=2 and ch["confidence"]>=60:
-        reasons.append(f"chiller probable in {ch['probable_views']} views")
-    if tw.get("probable_views",0)>=2 and tw["confidence"]>=60:
-        reasons.append(f"tower probable in {tw['probable_views']} views")
-    if pp["status"]=="strong" and pp["confidence"]>=75 and pp["views"]>=2:
-        reasons.append(f"strong process/hydronic piping across {pp['views']} views")
-    high = bool(reasons)
-
-    # A strong mechanical-yard signal is HIGH only when another high-value channel supports it.
-    if (not high and my["status"]=="strong" and my["confidence"]>=75 and
-        (ch["status"] in ("probable","strong") or tw["status"] in ("probable","strong") or
-         pp["status"] in ("probable","strong"))):
-        high=True; reasons.append("strong mechanical yard with high-value corroboration")
-
-    if high:
-        return "HIGH", reasons
-
-    # REVIEW: preserve ambiguous high-value candidates rather than discard them.
-    review=[]
-    for sig,name in ((ch,"chiller"),(tw,"tower/heat rejection")):
-        if sig["status"]=="probable":
-            review.append(f"{name} probable {sig['confidence']}%")
-        elif sig["status"]=="possible" and (sig["views"]>=2 or sig["confidence"]>=50):
-            review.append(f"{name} possible {sig['confidence']}% in {sig['views']} view(s)")
-    if pp["status"] in ("probable","strong"):
-        review.append(f"piping {pp['status']} {pp['confidence']}%")
-    if lg["status"] in ("probable","strong") and lg["confidence"]>=55:
-        review.append(f"large packaged HVAC {lg['status']} {lg['confidence']}%")
-    if my["status"] in ("probable","strong") and my["confidence"]>=60:
-        review.append(f"mechanical yard {my['status']} {my['confidence']}%")
-
-    if review:
-        return "REVIEW", review
-
-    return "LOW", ["ordinary/local HVAC only or no credible high-value equipment signal"]
-
-def sig_compact(sig):
-    st=sig.get("status","not_observed")
-    if st=="not_observed":
-        return "—"
-    tag={"strong":"STR","probable":"PROB","possible":"POSS"}.get(st,st.upper())
-    return f"{tag} {sig.get('confidence',0)}%/{sig.get('views',0)}v"
-
-def aggregate_equipment(buildings):
-    """Strongest physical-building signal for each equipment family."""
-    fields=("air_cooled_chiller","cooling_tower","large_packaged_hvac",
-            "small_packaged_hvac","condensers","piping","mechanical_yard")
-    out={}
-    for field in fields:
-        candidates=[]
-        for br in buildings:
-            if br.get("building",0)<=0:
-                continue
-            bd=(br.get("result") or {}).get("equipment_breakdown") or {}
-            sig=bd.get(field)
-            if sig:
-                candidates.append(sig)
-        if candidates:
-            out[field]=max(candidates,key=lambda s:(STATUS_RANK.get(s.get("status","not_observed"),0),
-                                                    int(s.get("confidence",0) or 0),
-                                                    int(s.get("views",0) or 0)))
-        else:
-            out[field]={"status":"not_observed","confidence":0,"views":0,
-                        "strong_views":0,"probable_views":0,"best_view":"","evidence":""}
-    return out
+def dataset_root():
+    p=Path.home()/"Downloads"/DATASET_NAME
+    (p/"images").mkdir(parents=True,exist_ok=True)
+    (p/"labels").mkdir(parents=True,exist_ok=True)
+    return p
 
 
-def deep_run_building(c,path,label,progress):
-    views=dv_crops(path);obs=[];use=[0,0]
-    for i,(vlabel,p) in enumerate(views):
-        progress(f"{label}: {vlabel} {i+1}/10")
-        x,r=dv_ask(c,IP,[{"type":"input_image","image_url":dv_url(p),"detail":"high"}],OBS,"crop_inspection")
-        obs.append({"view":vlabel,"observations":x})
-        try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
-        except:pass
-    progress(f"{label}: synthesizing")
-    x,r=dv_ask(c,SP,[{"type":"input_text","text":json.dumps(obs,separators=(",",":"))}],FINAL,"property_synthesis",6000,"medium")
-    try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
-    except:pass
+def safe_name(s):
+    s="".join(c if c.isalnum() or c in "-_" else "_" for c in (s or "candidate"))
+    while "__" in s:s=s.replace("__","_")
+    return s.strip("_") or "candidate"
 
-    # v0.9.11: GPT performs equipment recognition; deterministic business rules
-    # establish the minimum sales-prospect score. This prevents "no visible
-    # water loop" from vetoing a credible large chiller/tower anomaly.
-    sales_score,sales_class,sales_trace=deterministic_sales_score(obs,x)
-    x["model_score"]=int(x.get("score",0) or 0)
-    x["model_class"]=x.get("class","POOR")
-    x["score"]=sales_score
-    x["class"]=sales_class
-    x["sales_trace"]=sales_trace
 
-    # v0.9.11: preserve equipment observations separately from the score.
-    bd=equipment_breakdown(obs)
-    triage,triage_reasons=sales_triage(bd)
-    x["equipment_breakdown"]=bd
-    x["triage"]=triage
-    x["triage_reasons"]=triage_reasons
+def site_key(z):
+    return z.get("gpin") or (z.get("address") or f'{z.get("lon",0):.6f}_{z.get("lat",0):.6f}')
 
-    if sales_trace["rule_floor"] > sales_trace["model_score"]:
-        why="; ".join(sales_trace["reasons"][:3])
-        x["summary"]=f'{x.get("summary","")} SALES RULE FLOOR {sales_trace["rule_floor"]}: {why}.'
-    return x,obs,use
 
-CAMPUS_FINAL={"type":"object","additionalProperties":False,"properties":{"class":{"type":"string","enum":["GOOD","MAYBE","POOR"]},"score":{"type":"integer"},"confidence":{"type":"integer"},"best_building":{"type":"integer"},"high_value_buildings":{"type":"array","items":{"type":"integer"}},"key_evidence":{"type":"string"},"summary":{"type":"string"}},"required":["class","score","confidence","best_building","high_value_buildings","key_evidence","summary"]}
-CAMPUS_PROMPT="""Synthesize building-level commercial HVAC inspections for ONE campus/property. The sales opportunity is the CAMPUS, not an average building.
-Each physical building was independently analyzed by the frozen v0.6.6 Connection-Tracing engine.
+def labels_json_path():return dataset_root()/"annotations.json"
 
-NON-DILUTION RULE — MANDATORY:
-- Anchor the campus to the BEST physical-building opportunity.
-- A POOR or mediocre building can NEVER reduce/dilute the score or class earned by a stronger building.
-- Additional GOOD buildings may INCREASE the campus opportunity because they add real service scope. A MAYBE may add only a small bonus when it contains credible high-value mechanical evidence.
-- Multiple weak MAYBE buildings must NEVER accumulate into a stronger campus merely because there are several of them. Three weak buildings are still a weak campus.
-- One GOOD physical building means the campus is GOOD.
-- Think MAXIMUM + POSITIVE ADDITIONS, never averaging.
 
-Building 0 is campus-overview context only and is NOT a physical building. It may add corroborating evidence but may not lower the campus.
-Accessory/support structures should not influence the opportunity merely because they are ordinary.
-Return the physical building number carrying the strongest opportunity and identify other high-value buildings when present.
-Favor recall for high-value central/process HVAC."""
-
-def deep_run_campus(key,z,root,progress):
-    c=OpenAI(api_key=key,timeout=240);imgs=campus_images(z,root);results=[];use=[0,0];errors=[]
-    # One inexpensive campus-wide context call helps catch detached mechanical equipment / inter-building infrastructure.
+def load_dataset_labels():
+    p=labels_json_path()
+    if not p.exists():return {"version":1,"classes":[k for k,_ in EQUIPMENT_CLASSES],"sites":{}}
     try:
-        progress("Campus overview context...")
-        ov,r=dv_ask(c,IP,[{"type":"input_image","image_url":dv_url(imgs[0][1]),"detail":"high"}],OBS,"campus_overview")
-        ov_bd=equipment_breakdown([{"view":"campus overview","observations":ov}])
-        ov_triage,ov_reasons=sales_triage(ov_bd)
-        results.append({"building":0,"sqft":None,"result":{"class":"MAYBE","score":50,"confidence":50,
-            "cooling_towers":json.dumps(ov["cooling_towers"]),"air_cooled_chillers":json.dumps(ov["air_cooled_chillers"]),
-            "large_packaged_hvac":json.dumps(ov["large_packaged_hvac"]),"small_packaged_hvac":json.dumps(ov["small_packaged_hvac"]),
-            "piping":json.dumps(ov["piping"]),"central_system_evidence":json.dumps(ov["mechanical_yard"]),
-            "ambiguities":[],"summary":"Campus overview context only.",
-            "equipment_breakdown":ov_bd,"triage":ov_triage,"triage_reasons":ov_reasons}})
-        try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
-        except:pass
-    except Exception as e:errors.append(f"Campus overview: {type(e).__name__}: {e}")
-    for n,(label,path,b) in enumerate(imgs[1:],1):
-        try:
-            r,obs,u=deep_run_building(c,path,f"Building {n}/{len(imgs)-1}",progress)
-            results.append({"building":n,"sqft":b.get("sq"),"result":r});use[0]+=u[0];use[1]+=u[1]
-        except Exception as e:errors.append(f"Building {n}: {type(e).__name__}: {e}")
-    if not results:raise RuntimeError("All building analyses failed: "+" | ".join(errors))
-    progress("Campus synthesis...")
-    final,r=dv_ask(c,CAMPUS_PROMPT,[{"type":"input_text","text":json.dumps(results,separators=(",",":"))}],CAMPUS_FINAL,"campus_synthesis",5000,"medium")
-    try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
-    except:pass
+        d=json.loads(p.read_text())
+        d.setdefault("version",1);d.setdefault("classes",[k for k,_ in EQUIPMENT_CLASSES]);d.setdefault("sites",{})
+        return d
+    except Exception:
+        return {"version":1,"classes":[k for k,_ in EQUIPMENT_CLASSES],"sites":{}}
 
-    # Hard business rule: weak buildings never dilute the strongest physical-building opportunity.
-    physical=[x for x in results if x.get("building",0)>0 and isinstance(x.get("result"),dict)]
-    if physical:
-        best=max(physical,key=lambda x:int(x["result"].get("score",0) or 0))
-        best_score=int(best["result"].get("score",0) or 0)
-        best_class=best["result"].get("class","POOR")
-        rank={"POOR":0,"MAYBE":1,"GOOD":2}
-        final["score"]=max(int(final.get("score",0) or 0),best_score)
-        if rank.get(best_class,0)>rank.get(final.get("class","POOR"),0):
-            final["class"]=best_class
-        final["best_building"]=best["building"]
-        # v0.9.9: weak MAYBEs do not accumulate. Campus may exceed the best
-        # building only when another building is independently GOOD.
-        other_good=[x for x in physical if x["building"]!=best["building"] and x["result"].get("class")=="GOOD"]
-        max_bonus=min(6,2*len(other_good))
-        final["score"]=min(final["score"],best_score+max_bonus)
-        final["score"]=max(final["score"],best_score)
-        final["class"]="GOOD" if final["score"]>=65 else "MAYBE" if final["score"]>=40 else "POOR"
-        positive=[x["building"] for x in physical if x["result"].get("class") in ("GOOD","MAYBE")]
-        final["high_value_buildings"]=sorted(set(final.get("high_value_buildings",[])+positive))
 
-        # Equipment-first campus triage: one interesting building is enough.
-        triage_items=[(x["result"].get("triage","LOW"),x) for x in physical]
-        best_triage,best_triage_row=max(triage_items,key=lambda t:TRIAGE_RANK.get(t[0],0))
-        campus_triage=best_triage
-        triage_reasons=list(best_triage_row["result"].get("triage_reasons",[]))
+def save_dataset_labels(d):
+    root=dataset_root();p=root/"annotations.json";tmp=root/"annotations.tmp.json"
+    tmp.write_text(json.dumps(d,indent=2));tmp.replace(p)
+    write_site_csv(d)
+    (root/"classes.txt").write_text("\n".join(k for k,_ in EQUIPMENT_CLASSES)+"\n")
 
-        # Campus overview may catch detached yards/towers between buildings, but
-        # a single overview image may only rescue LOW to REVIEW, never create HIGH.
-        overview=next((x for x in results if x.get("building")==0),None)
-        if campus_triage=="LOW" and overview and overview["result"].get("triage") in ("REVIEW","HIGH"):
-            campus_triage="REVIEW"
-            triage_reasons=["campus overview shows a high-value anomaly"] + overview["result"].get("triage_reasons",[])
 
-        final["triage"]=campus_triage
-        final["triage_reasons"]=triage_reasons
-        final["equipment_breakdown"]=aggregate_equipment(results)
-    return final,results,use,errors,imgs
+def write_site_csv(d):
+    p=dataset_root()/"site_labels.csv"
+    with p.open("w",newline="",encoding="utf-8") as f:
+        w=csv.writer(f)
+        w.writerow(["site_key","facility","address","rating","land_use","zoning","largest_ft2","building_count","notes","updated_utc"])
+        for k,s in d.get("sites",{}).items():
+            meta=s.get("meta",{})
+            w.writerow([k,meta.get("facility",""),meta.get("address",""),s.get("rating","UNRATED"),
+                        meta.get("land",""),meta.get("zone",""),meta.get("largest",""),meta.get("count",""),
+                        s.get("notes",""),s.get("updated_utc","")])
+
+
+def ensure_yolo_label(image_record):
+    """Write normalized YOLO boxes. Empty files are valid negative examples."""
+    root=dataset_root();img_name=image_record.get("dataset_image")
+    if not img_name:return
+    w=float(image_record.get("width") or 1);h=float(image_record.get("height") or 1)
+    lines=[]
+    for a in image_record.get("annotations",[]):
+        if a.get("class") not in CLASS_IDS:continue
+        x1,y1,x2,y2=[float(a.get(k,0)) for k in ("x1","y1","x2","y2")]
+        x1,x2=sorted((max(0,min(w,x1)),max(0,min(w,x2))));y1,y2=sorted((max(0,min(h,y1)),max(0,min(h,y2))))
+        if x2-x1<2 or y2-y1<2:continue
+        xc=(x1+x2)/(2*w);yc=(y1+y2)/(2*h);bw=(x2-x1)/w;bh=(y2-y1)/h
+        lines.append(f"{CLASS_IDS[a['class']]} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
+    (root/"labels"/(Path(img_name).stem+".txt")).write_text("\n".join(lines)+("\n" if lines else ""))
+
+
+def export_dataset_zip():
+    root=dataset_root();stamp=datetime.now().strftime("%Y%m%d_%H%M")
+    out=Path.home()/"Downloads"/f"{DATASET_NAME}_{stamp}.zip"
+    with zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED) as z:
+        for p in root.rglob("*"):
+            if p.is_file():z.write(p,p.relative_to(root.parent))
+    return out
+
+
+class ReviewWindow:
+    def __init__(self,app,z,raw_imgs):
+        self.app=app;self.z=z;self.root=dataset_root();self.data=app.label_data;self.key=site_key(z)
+        self.site=self.data["sites"].setdefault(self.key,{"rating":"UNRATED","notes":"","meta":{},"images":[]})
+        self.site["meta"]={"facility":z.get("facility","") or "","address":z.get("address","") or "","gpin":z.get("gpin","") or "",
+                           "land":z.get("land","") or "","zone":z.get("zone","") or "","largest":z.get("largest"),"count":z.get("count",0),
+                           "lon":z.get("lon"),"lat":z.get("lat"),"source":z.get("source","")}
+        self.images=self.prepare_images(raw_imgs);self.idx=0;self.current_pil=None;self.tkimg=None;self.scale=1;self.offset=(0,0);self.drag_start=None;self.temp_rect=None
+        self.win=tk.Toplevel(app.r);self.win.title(f"Review & Label — {z.get('facility') or z.get('address')}");self.win.geometry("1500x900")
+        self.win.protocol("WM_DELETE_WINDOW",self.close)
+        self.build_ui();self.load_image()
+
+    def prepare_images(self,imgs):
+        safe=safe_name((self.z.get("facility") or "")+"_"+(self.z.get("address") or ""))
+        existing={x.get("label"):x for x in self.site.get("images",[])}
+        out=[]
+        for label,p,b in imgs:
+            im=Image.open(p);w,h=im.size
+            dataset_name=f"{safe}_{safe_name(label)}.jpg"
+            dst=self.root/"images"/dataset_name
+            if not dst.exists():shutil.copy2(p,dst)
+            rec=existing.get(label,{"label":label,"annotations":[],"negative":False,"image_notes":"","rating":"UNRATED"})
+            rec.update({"dataset_image":dataset_name,"width":w,"height":h,"building_sqft":b.get("sq") if b else None,
+                        "building_lon":b.get("lon") if b else None,"building_lat":b.get("lat") if b else None})
+            out.append(rec)
+        self.site["images"]=out
+        return out
+
+    def build_ui(self):
+        top=ttk.Frame(self.win,padding=8);top.pack(fill="x")
+        ttk.Label(top,text=f"{self.z.get('facility') or ''}   {self.z.get('address') or ''}",font=("Segoe UI",11,"bold")).pack(side="left")
+        self.imgtitle=tk.StringVar();ttk.Label(top,textvariable=self.imgtitle).pack(side="left",padx=20)
+        ttk.Button(top,text="Save",command=self.save).pack(side="right",padx=4)
+        ttk.Button(top,text="Save & Close",command=self.close).pack(side="right",padx=4)
+
+        body=ttk.Frame(self.win);body.pack(fill="both",expand=True,padx=8,pady=4)
+        left=ttk.Frame(body);left.pack(side="left",fill="both",expand=True)
+        right=ttk.Frame(body,width=360,padding=8);right.pack(side="right",fill="y")
+
+        self.canvas=tk.Canvas(left,bg="#202020",cursor="crosshair",highlightthickness=0)
+        self.canvas.pack(fill="both",expand=True)
+        self.canvas.bind("<ButtonPress-1>",self.on_press);self.canvas.bind("<B1-Motion>",self.on_drag);self.canvas.bind("<ButtonRelease-1>",self.on_release)
+        self.canvas.bind("<Configure>",lambda e:self.render())
+
+        nav=ttk.Frame(left,padding=6);nav.pack(fill="x")
+        ttk.Button(nav,text="◀ Previous",command=self.prev).pack(side="left")
+        ttk.Button(nav,text="Next ▶",command=self.next).pack(side="left",padx=8)
+        ttk.Label(nav,text="Drag a box around equipment. Boxes are saved in original-image coordinates.").pack(side="left",padx=15)
+
+        ttk.Label(right,text="SITE RATING",font=("Segoe UI",10,"bold")).pack(anchor="w")
+        self.rating=tk.StringVar(value=self.site.get("rating","UNRATED"))
+        for v in ("GOOD","MAYBE","POOR","UNRATED"):
+            ttk.Radiobutton(right,text=v,value=v,variable=self.rating).pack(anchor="w")
+
+        ttk.Separator(right).pack(fill="x",pady=8)
+        ttk.Label(right,text="BOX CLASS",font=("Segoe UI",10,"bold")).pack(anchor="w")
+        self.class_var=tk.StringVar(value=EQUIPMENT_CLASSES[0][0])
+        self.class_box=ttk.Combobox(right,textvariable=self.class_var,state="readonly",width=36,
+                                    values=[k for k,_ in EQUIPMENT_CLASSES]);self.class_box.pack(fill="x",pady=3)
+        self.class_desc=tk.StringVar();ttk.Label(right,textvariable=self.class_desc,wraplength=330).pack(anchor="w")
+        self.class_box.bind("<<ComboboxSelected>>",lambda e:self.update_class_desc());self.update_class_desc()
+
+        self.negative=tk.BooleanVar();ttk.Checkbutton(right,text="Negative image: no target equipment",variable=self.negative,command=self.neg_changed).pack(anchor="w",pady=(8,3))
+        ttk.Label(right,text="Use Negative when no HIGH-VALUE target class is present. Ordinary small RTUs, splits and residential-style condensers are background and should NOT be boxed.",wraplength=330).pack(anchor="w")
+
+        ttk.Label(right,text="IMAGE / BUILDING RATING",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(10,2))
+        self.image_rating=tk.StringVar(value="UNRATED")
+        br=ttk.Frame(right);br.pack(fill="x")
+        for v in ("GOOD","MAYBE","POOR","UNRATED"):
+            ttk.Radiobutton(br,text=v,value=v,variable=self.image_rating).pack(side="left")
+
+        ttk.Label(right,text="ANNOTATIONS",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(10,2))
+        self.listbox=tk.Listbox(right,height=12);self.listbox.pack(fill="x")
+        b=ttk.Frame(right);b.pack(fill="x",pady=4)
+        ttk.Button(b,text="Delete Selected",command=self.delete_box).pack(side="left")
+        ttk.Button(b,text="Clear Image",command=self.clear_boxes).pack(side="left",padx=4)
+
+        ttk.Label(right,text="SITE NOTES",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(10,2))
+        self.notes=tk.Text(right,width=38,height=7,wrap="word");self.notes.pack(fill="x");self.notes.insert("1.0",self.site.get("notes","") or "")
+        ttk.Label(right,text="IMAGE NOTES",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(10,2))
+        self.image_notes=tk.Text(right,width=38,height=5,wrap="word");self.image_notes.pack(fill="x")
+
+    def update_class_desc(self):
+        d=dict(EQUIPMENT_CLASSES);self.class_desc.set(d.get(self.class_var.get(),""))
+
+    def persist_current_fields(self):
+        if not self.images:return
+        rec=self.images[self.idx];rec["negative"]=bool(self.negative.get());rec["image_notes"]=self.image_notes.get("1.0","end").strip();rec["rating"]=self.image_rating.get()
+        self.site["rating"]=self.rating.get();self.site["notes"]=self.notes.get("1.0","end").strip();self.site["updated_utc"]=datetime.now(timezone.utc).isoformat()
+
+    def load_image(self):
+        if not self.images:return
+        rec=self.images[self.idx];p=self.root/"images"/rec["dataset_image"]
+        self.current_pil=Image.open(p).convert("RGB")
+        self.imgtitle.set(f"{self.idx+1}/{len(self.images)} — {rec['label']} — {rec.get('building_sqft') or 'campus'}")
+        self.negative.set(bool(rec.get("negative",False)));self.image_rating.set(rec.get("rating","UNRATED"))
+        self.image_notes.delete("1.0","end");self.image_notes.insert("1.0",rec.get("image_notes","") or "")
+        self.refresh_list();self.render()
+
+    def render(self):
+        if not self.current_pil:return
+        cw=max(100,self.canvas.winfo_width());ch=max(100,self.canvas.winfo_height())
+        iw,ih=self.current_pil.size;self.scale=min(cw/iw,ch/ih);rw,rh=max(1,int(iw*self.scale)),max(1,int(ih*self.scale))
+        ox=(cw-rw)//2;oy=(ch-rh)//2;self.offset=(ox,oy)
+        view=self.current_pil.resize((rw,rh),Image.LANCZOS);self.tkimg=ImageTk.PhotoImage(view)
+        self.canvas.delete("all");self.canvas.create_image(ox,oy,anchor="nw",image=self.tkimg)
+        for n,a in enumerate(self.images[self.idx].get("annotations",[]),1):
+            x1=ox+a["x1"]*self.scale;y1=oy+a["y1"]*self.scale;x2=ox+a["x2"]*self.scale;y2=oy+a["y2"]*self.scale
+            self.canvas.create_rectangle(x1,y1,x2,y2,outline="#ffcc00",width=2)
+            self.canvas.create_text(x1+3,y1+3,anchor="nw",text=f"{n} {a['class']}",fill="#ffcc00",font=("Segoe UI",9,"bold"))
+
+    def canvas_to_image(self,x,y):
+        ox,oy=self.offset
+        if self.scale<=0:return None
+        ix=(x-ox)/self.scale;iy=(y-oy)/self.scale
+        w,h=self.current_pil.size
+        return max(0,min(w,ix)),max(0,min(h,iy))
+
+    def on_press(self,e):
+        if self.negative.get():return
+        self.drag_start=(e.x,e.y);self.temp_rect=self.canvas.create_rectangle(e.x,e.y,e.x,e.y,outline="#00ff99",width=2,dash=(4,2))
+    def on_drag(self,e):
+        if self.drag_start and self.temp_rect:self.canvas.coords(self.temp_rect,self.drag_start[0],self.drag_start[1],e.x,e.y)
+    def on_release(self,e):
+        if not self.drag_start:return
+        a=self.canvas_to_image(*self.drag_start);b=self.canvas_to_image(e.x,e.y);self.drag_start=None
+        if self.temp_rect:self.canvas.delete(self.temp_rect);self.temp_rect=None
+        if not a or not b:return
+        x1,x2=sorted((a[0],b[0]));y1,y2=sorted((a[1],b[1]))
+        if x2-x1<8 or y2-y1<8:return
+        self.images[self.idx].setdefault("annotations",[]).append({"class":self.class_var.get(),"x1":round(x1,1),"y1":round(y1,1),"x2":round(x2,1),"y2":round(y2,1)})
+        self.negative.set(False);self.refresh_list();self.render()
+
+    def refresh_list(self):
+        self.listbox.delete(0,"end")
+        for n,a in enumerate(self.images[self.idx].get("annotations",[]),1):
+            self.listbox.insert("end",f"{n}. {a['class']}  ({int(a['x1'])},{int(a['y1'])})-({int(a['x2'])},{int(a['y2'])})")
+    def delete_box(self):
+        s=self.listbox.curselection()
+        if not s:return
+        del self.images[self.idx]["annotations"][s[0]];self.refresh_list();self.render()
+    def clear_boxes(self):
+        if messagebox.askyesno("Clear annotations","Delete all boxes on this image?",parent=self.win):
+            self.images[self.idx]["annotations"]=[];self.refresh_list();self.render()
+    def neg_changed(self):
+        if self.negative.get() and self.images[self.idx].get("annotations"):
+            if messagebox.askyesno("Negative image","Marking this image negative will delete its equipment boxes. Continue?",parent=self.win):
+                self.images[self.idx]["annotations"]=[];self.refresh_list();self.render()
+            else:self.negative.set(False)
+    def prev(self):
+        self.persist_current_fields()
+        if self.idx>0:self.idx-=1;self.load_image()
+    def next(self):
+        self.persist_current_fields()
+        if self.idx<len(self.images)-1:self.idx+=1;self.load_image()
+    def save(self):
+        self.persist_current_fields()
+        for rec in self.images:ensure_yolo_label(rec)
+        save_dataset_labels(self.data);self.app.apply_human_labels();self.app.refresh()
+        self.app.st.set(f"Saved labels for {self.z.get('facility') or self.z.get('address')} to {dataset_root()}")
+    def close(self):
+        self.save();self.win.destroy()
+
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.11 — Sales Triage + Equipment Breakdown");r.geometry("1700x900")
+        self.r=r;self.rows=[];self.label_data=load_dataset_labels();r.title("HVAC Territory Discovery v0.10.0 — Review & Label");r.geometry("1600x900")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach test center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)
         ttk.Label(t,text="Radius mi:").grid(row=0,column=2);self.rad=tk.StringVar(value="1.0");ttk.Entry(t,textvariable=self.rad,width=6).grid(row=0,column=3)
         ttk.Label(t,text="Size threshold ft²:").grid(row=0,column=4);self.mn=tk.StringVar(value="10000");ttk.Entry(t,textvariable=self.mn,width=8).grid(row=0,column=5)
         self.b=ttk.Button(t,text="Discover + Prescreen",command=self.start);self.b.grid(row=0,column=6,padx=8)
-        ttk.Label(t,text="OpenAI key:").grid(row=0,column=7);self.key=tk.StringVar()
-        ttk.Entry(t,textvariable=self.key,width=22,show="*").grid(row=0,column=8,padx=4)
-        self.st=tk.StringVar(value="Non-vision prescreen first. Deep Vision only on shortlisted candidates.")
+        self.st=tk.StringVar(value="GIS discovery + human review. Labels build a reusable HVAC aerial training dataset.")
         ttk.Label(r,textvariable=self.st).pack(fill="x",padx=10)
-        cs=("rank","facility","address","largest","bldgs","inspect","miles","land","pre","gis",
-            "triage","chiller","tower","large","pipe","yard","dvscore","source")
+
+        cs=("rank","facility","address","largest","bldgs","inspect","miles","land","tier","pre","gis","human","boxes","source")
         self.tree=ttk.Treeview(r,columns=cs,show="headings")
-        widths=(40,170,155,70,45,50,50,120,40,45,70,105,105,105,105,95,50,85)
-        for c,w in zip(cs,widths):
-            self.tree.heading(c,text=c.upper());self.tree.column(c,width=w,anchor="w")
+        widths=(45,230,190,80,55,60,60,170,70,55,55,80,60,95)
+        for c,w in zip(cs,widths):self.tree.heading(c,text=c.upper());self.tree.column(c,width=w,anchor="w")
         self.tree.pack(fill="both",expand=True,padx=10,pady=8)
+        self.tree.bind("<Double-1>",lambda e:self.review_selected())
+
         f=ttk.Frame(r,padding=10);f.pack(fill="x")
         ttk.Button(f,text="Download Aerial",command=self.dl).pack(side="left")
         ttk.Button(f,text="Save Campus Images",command=self.save_campus).pack(side="left",padx=8)
-        ttk.Button(f,text="Deep Analyze Selected",command=self.deep_selected).pack(side="left",padx=8)
-        ttk.Button(f,text="Deep Analyze Top 10",command=lambda:self.deep_batch(10)).pack(side="left",padx=8)
-        ttk.Button(f,text="Deep Analyze Top 25",command=lambda:self.deep_batch(25)).pack(side="left",padx=8)
-        ttk.Button(f,text="Equipment Details",command=self.equipment_details).pack(side="left",padx=8)
+        ttk.Button(f,text="Review / Label Selected",command=self.review_selected).pack(side="left",padx=8)
+        ttk.Button(f,text="Export Dataset ZIP",command=self.export_zip).pack(side="left",padx=8)
         ttk.Button(f,text="Copy Address",command=self.copy).pack(side="left",padx=8)
+        ttk.Button(f,text="Dataset Summary",command=self.dataset_summary).pack(side="right",padx=8)
 
     def start(self):
-        self.b.config(state="disabled");self.st.set("Querying GIS and applying non-vision prescreen...")
-        threading.Thread(target=self.work,daemon=True).start()
+        self.b.config(state="disabled");self.st.set("Querying GIS and applying non-vision prescreen...");threading.Thread(target=self.work,daemon=True).start()
     def work(self):
         try:
-            x,y=geocode(self.q.get().strip());mn=float(self.mn.get())
-            self.rows,np,nb,nj,src,errs=discover(x,y,float(self.rad.get()),mn)
-            self.diag=(np,nb,nj,src,errs);self.r.after(0,self.show)
+            x,y=geocode(self.q.get().strip());mn=float(self.mn.get());self.rows,np,nb,nj,src,errs=discover(x,y,float(self.rad.get()),mn)
+            self.diag=(np,nb,nj,src,errs);self.apply_human_labels();self.r.after(0,self.show)
         except Exception as e:self.r.after(0,lambda e=e:self.fail(e))
+    def apply_human_labels(self):
+        sites=self.label_data.get("sites",{})
+        for z in self.rows:
+            s=sites.get(site_key(z),{});z["human_rating"]=s.get("rating","") if s.get("rating")!="UNRATED" else ""
+            z["human_boxes"]=sum(len(x.get("annotations",[])) for x in s.get("images",[]))
     def rowvals(self,n,z):
         fmt=lambda v:f"{v:,}" if v is not None else "UNKNOWN"
-        bd=z.get("equipment_breakdown") or {}
-        blank={"status":"not_observed","confidence":0,"views":0}
-        return (
-            n,z.get("facility","") or "",z["address"],fmt(z["largest"]),z["count"],len(meaningful_buildings(z)),
-            z["distance"],z["land"],"YES" if z["pre"] else "NO",z["score"],
-            z.get("triage",""),
-            sig_compact(bd.get("air_cooled_chiller",blank)) if bd else "",
-            sig_compact(bd.get("cooling_tower",blank)) if bd else "",
-            sig_compact(bd.get("large_packaged_hvac",blank)) if bd else "",
-            sig_compact(bd.get("piping",blank)) if bd else "",
-            sig_compact(bd.get("mechanical_yard",blank)) if bd else "",
-            z.get("deep_score",""),z["source"]
-        )
-
+        return (n,z.get("facility","") or "",z.get("address","") or "",fmt(z.get("largest")),z.get("count",0),len(meaningful_buildings(z)),
+                z.get("distance",""),z.get("land",""),z.get("tier",""),"YES" if z.get("pre") else "NO",z.get("score",""),
+                z.get("human_rating",""),z.get("human_boxes",0),z.get("source",""))
     def show(self):
         for i in self.tree.get_children():self.tree.delete(i)
         for n,z in enumerate(self.rows,1):self.tree.insert("","end",iid=str(n-1),values=self.rowvals(n,z))
-        pre=sum(z["pre"] for z in self.rows);np,nb,nj,src,errs=self.diag
-        warn=(" | fallback: "+errs[0][:70]) if errs and src!="VB CITY" else ""
-        self.st.set(f"{len(self.rows)} discovered | {pre} pass prescreen | parcels {np} | footprints {nb} | joined {nj} | {src}{warn}")
-        self.b.config(state="normal")
+        pre=sum(bool(z.get("pre")) for z in self.rows);np,nb,nj,src,errs=self.diag;warn=(" | fallback: "+errs[0][:70]) if errs and src!="VB CITY" else ""
+        self.st.set(f"{len(self.rows)} discovered | {pre} pass prescreen | parcels {np} | footprints {nb} | joined {nj} | {src}{warn}");self.b.config(state="normal")
+    def refresh(self):
+        self.apply_human_labels();self.rows.sort(key=lambda z:(0 if z.get("human_rating")=="GOOD" else 1 if z.get("human_rating")=="MAYBE" else 2 if z.get("human_rating")=="POOR" else 3,
+                                                          0 if z.get("pre") else 1,-z.get("score",0),-(z.get("largest") or 0)))
+        for i in self.tree.get_children():self.tree.delete(i)
+        for n,z in enumerate(self.rows,1):self.tree.insert("","end",iid=str(n-1),values=self.rowvals(n,z))
     def fail(self,e):self.st.set("Failed: "+repr(e));self.b.config(state="normal")
     def selidx(self):
         s=self.tree.selection()
@@ -812,144 +572,51 @@ class App:
     def dl(self):
         i=self.selidx()
         if i is None:return
-        z=self.rows[i];out=Path.home()/"Downloads"/f'HVAC_{z["address"].replace(" ","_") or "candidate"}.jpg'
-        self.st.set("Downloading aerial...")
+        z=self.rows[i];out=Path.home()/"Downloads"/f'HVAC_{safe_name(z.get("address") or "candidate")}.jpg';self.st.set("Downloading aerial...")
         def w():
-            try:aerial(z["lon"],z["lat"],z["largest"],out);self.r.after(0,lambda:self.st.set("Saved "+str(out)))
+            try:aerial(z["lon"],z["lat"],z.get("largest"),out);self.r.after(0,lambda:self.st.set("Saved "+str(out)))
             except Exception as e:self.r.after(0,lambda:self.st.set("Download failed: "+repr(e)))
         threading.Thread(target=w,daemon=True).start()
     def save_campus(self):
         i=self.selidx()
         if i is None:return
-        z=self.rows[i];safe="".join(c if c.isalnum() or c in "-_" else "_" for c in (z["address"] or "candidate"));out=Path.home()/"Downloads"/f"HVAC_CAMPUS_{safe}"
-        self.st.set("Generating campus/building inspection images...")
+        z=self.rows[i];out=Path.home()/"Downloads"/f"HVAC_CAMPUS_{safe_name(z.get('address') or 'candidate')}";self.st.set("Generating campus/building images...")
         def w():
             try:
-                imgs=campus_images(z,out);(out/"README.txt").write_text("Campus-aware inspection set. 00 is campus overview. Each B image is centered on one meaningful associated building and includes perimeter.\n\n"+"\n".join(f"{label}: {Path(p).name}" for label,p,_ in imgs))
+                imgs=campus_images(z,out);(out/"README.txt").write_text("00 is campus overview. B images are centered on meaningful associated buildings and include perimeter.\n\n"+"\n".join(f"{label}: {Path(p).name}" for label,p,_ in imgs))
                 self.r.after(0,lambda:self.st.set(f"Saved {len(imgs)} campus images to {out}"))
             except Exception as e:self.r.after(0,lambda e=e:self.st.set("Save campus images failed: "+repr(e)))
         threading.Thread(target=w,daemon=True).start()
-    def getkey(self):
-        k=self.key.get().strip()
-        if not k:messagebox.showinfo("OpenAI key","Paste your OpenAI API key first.");return None
-        return k
-    def run_deep_one(self,i,k,batchpos=None,total=None):
-        z=self.rows[i];safe="".join(c if c.isalnum() or c in "-_" else "_" for c in (z["address"] or str(i)));root=Path(tempfile.gettempdir())/f"hvac_campus_{safe}_{abs(hash((z['lon'],z['lat'])))}"
-        def prog(x):
-            prefix=f"[{batchpos}/{total}] " if batchpos else "";self.r.after(0,lambda:self.st.set(prefix+x+" — "+(z.get("facility") or z["address"] or "candidate")))
-        result,buildings,use,errs,imgs=deep_run_campus(k,z,root,prog)
-        z["deep_class"]=result["class"];z["deep_score"]=result["score"];z["deep_conf"]=result["confidence"];z["deep_summary"]=result["summary"];z["deep_result"]=result;z["building_results"]=buildings;z["tokens"]=sum(use);z["deep_errors"]=errs;z["best_building"]=result["best_building"]
-        z["triage"]=result.get("triage","LOW")
-        z["triage_reasons"]=result.get("triage_reasons",[])
-        z["equipment_breakdown"]=result.get("equipment_breakdown") or aggregate_equipment(buildings)
-        parts=[]
-        for br in buildings:
-            if br.get("building",0)>0:
-                rr=br.get("result",{})
-                ms=rr.get("model_score")
-                rf=(rr.get("sales_trace") or {}).get("rule_floor")
-                extra=f" [model {ms}, rule {rf}]" if ms is not None else ""
-                parts.append(f'B{br["building"]}: {rr.get("class","?")} {rr.get("score","?")}{extra}')
-        z["building_score_trace"]=" | ".join(parts)
-    def refresh(self):
-        self.rows.sort(key=lambda z:(
-            0 if z.get("triage")=="HIGH" else 1 if z.get("triage")=="REVIEW" else 2 if z.get("triage")=="LOW" else 3,
-            -z.get("deep_score",0),0 if z["pre"] else 1,-z["score"],-(z["largest"] or 0)))
-        for x in self.tree.get_children():self.tree.delete(x)
-        for n,z in enumerate(self.rows,1):self.tree.insert("","end",iid=str(n-1),values=self.rowvals(n,z))
-    def deep_selected(self):
-        k=self.getkey();i=self.selidx()
-        if not k or i is None:return
-        self.st.set("Starting Deep Vision...")
-        def w():
-            try:
-                self.run_deep_one(i,k);z=self.rows[i]
-                self.r.after(0,self.refresh)
-                self.r.after(0,lambda:self.st.set(
-                    f'{z["address"]}: TRIAGE {z.get("triage","")} — {z.get("building_score_trace","")} — '
-                    f'DV score {z["deep_score"]}/100 — {z["deep_summary"]} | {z["tokens"]:,} tokens'))
-            except Exception as e:self.r.after(0,lambda e=e:self.st.set("Deep Vision failed: "+repr(e)))
-        threading.Thread(target=w,daemon=True).start()
-    def deep_batch(self,n):
-        k=self.getkey()
-        if not k:return
-        ids=[i for i,z in enumerate(self.rows) if z["pre"] and not z.get("deep_class")][:n]
-        if not ids:messagebox.showinfo("Deep Vision","No unscreened prescreen candidates.");return
-        self.st.set(f"Deep Vision batch starting: {len(ids)} candidates...")
-        def w():
-            errors=[]
-            for pos,i in enumerate(ids,1):
-                try:self.run_deep_one(i,k,pos,len(ids))
-                except Exception as e:
-                    msg=f"{self.rows[i]['address']}: {type(e).__name__}: {e}";self.rows[i]["deep_error"]=msg;errors.append(msg)
-            self.r.after(0,self.refresh)
-            if errors:
-                log=Path.home()/"Downloads"/"HVAC_v0911_batch_errors.txt";log.write_text("\n".join(errors))
-                self.r.after(0,lambda:self.st.set(f"Campus Deep Vision complete: {len(ids)-len(errors)} analyzed, {len(errors)} errors. Log: {log}"))
-            else:self.r.after(0,lambda:self.st.set(f"Campus Deep Vision complete: {len(ids)} analyzed, 0 errors."))
-        threading.Thread(target=w,daemon=True).start()
-    def equipment_details(self):
+    def review_selected(self):
         i=self.selidx()
         if i is None:return
+        self.st.set("Generating review images...")
         z=self.rows[i]
-        if not z.get("building_results"):
-            messagebox.showinfo("Equipment Details","Run Deep Analyze Selected first.")
-            return
-
-        win=tk.Toplevel(self.r)
-        win.title(f'Equipment Details — {z.get("facility") or z["address"]}')
-        win.geometry("1050x760")
-        txt=tk.Text(win,wrap="word",font=("Consolas",10))
-        sb=ttk.Scrollbar(win,orient="vertical",command=txt.yview)
-        txt.configure(yscrollcommand=sb.set)
-        sb.pack(side="right",fill="y");txt.pack(fill="both",expand=True,padx=8,pady=8)
-
-        txt.insert("end",f'{z.get("facility") or ""}\n{z["address"]}\n')
-        txt.insert("end",f'SALES TRIAGE: {z.get("triage","")}\n')
-        txt.insert("end","TRIAGE REASONS: "+"; ".join(z.get("triage_reasons",[]))+"\n")
-        txt.insert("end",f'Diagnostic DV score: {z.get("deep_score","")}/100\n\n')
-
-        order=[
-            ("air_cooled_chiller","AIR-COOLED / PROCESS CHILLER"),
-            ("cooling_tower","COOLING TOWER / HEAT REJECTION"),
-            ("large_packaged_hvac","LARGE PACKAGED HVAC"),
-            ("small_packaged_hvac","SMALL PACKAGED HVAC"),
-            ("condensers","CONDENSERS / SPLITS"),
-            ("piping","HYDRONIC / PROCESS PIPING"),
-            ("mechanical_yard","MECHANICAL YARD"),
-        ]
-
-        for br in z["building_results"]:
-            bnum=br.get("building",0)
-            rr=br.get("result") or {}
-            if bnum==0:
-                txt.insert("end","="*86+"\nCAMPUS OVERVIEW CONTEXT\n")
-            else:
-                txt.insert("end","="*86+f'\nBUILDING {bnum} — {int(br.get("sqft") or 0):,} ft²\n')
-            txt.insert("end",f'Triage: {rr.get("triage","context")}   ')
-            if bnum>0:
-                txt.insert("end",f'DV: {rr.get("class","")} {rr.get("score","")}/100')
-            txt.insert("end","\n")
-            if rr.get("triage_reasons"):
-                txt.insert("end","Why: "+"; ".join(rr["triage_reasons"])+"\n")
-
-            bd=rr.get("equipment_breakdown") or {}
-            for key,label in order:
-                sig=bd.get(key)
-                if not sig:continue
-                txt.insert("end",f'\n{label}: {sig_compact(sig)}\n')
-                ev=(sig.get("evidence") or "").strip()
-                if ev:txt.insert("end",f'  Evidence: {ev}\n')
-                if sig.get("best_view"):txt.insert("end",f'  Best view: {sig["best_view"]}\n')
-
-            if rr.get("summary"):
-                txt.insert("end","\nModel synthesis: "+rr["summary"]+"\n")
-            txt.insert("end","\n")
-        txt.configure(state="disabled")
-
+        def w():
+            try:
+                safe=safe_name((z.get("facility") or "")+"_"+(z.get("address") or ""))
+                work=Path(tempfile.gettempdir())/f"hvac_label_{safe}_{abs(hash((z.get('lon'),z.get('lat'))))}"
+                imgs=campus_images(z,work)
+                self.r.after(0,lambda imgs=imgs:ReviewWindow(self,z,imgs))
+                self.r.after(0,lambda:self.st.set("Review images ready. Draw boxes around known equipment."))
+            except Exception as e:self.r.after(0,lambda e=e:self.st.set("Review failed: "+repr(e)))
+        threading.Thread(target=w,daemon=True).start()
+    def export_zip(self):
+        try:save_dataset_labels(self.label_data);out=export_dataset_zip();self.st.set(f"Dataset exported: {out}")
+        except Exception as e:self.st.set("Dataset export failed: "+repr(e))
+    def dataset_summary(self):
+        sites=self.label_data.get("sites",{});ratings={k:0 for k in ("GOOD","MAYBE","POOR","UNRATED")};boxes=neg=images=0;counts={k:0 for k,_ in EQUIPMENT_CLASSES}
+        for s in sites.values():
+            ratings[s.get("rating","UNRATED")]=ratings.get(s.get("rating","UNRATED"),0)+1
+            for rec in s.get("images",[]):
+                images+=1;neg+=1 if rec.get("negative") else 0
+                for a in rec.get("annotations",[]):boxes+=1;counts[a.get("class")]=counts.get(a.get("class"),0)+1
+        txt=f"Sites: {len(sites)}\nGOOD {ratings.get('GOOD',0)} | MAYBE {ratings.get('MAYBE',0)} | POOR {ratings.get('POOR',0)} | UNRATED {ratings.get('UNRATED',0)}\nImages: {images} | negative images: {neg} | boxes: {boxes}\n\n"
+        txt+="\n".join(f"{k}: {counts.get(k,0)}" for k,_ in EQUIPMENT_CLASSES);messagebox.showinfo("Training Dataset Summary",txt)
     def copy(self):
         i=self.selidx()
         if i is not None:
-            z=self.rows[i];self.r.clipboard_clear();self.r.clipboard_append(z["address"]);self.st.set("Address copied.")
+            z=self.rows[i];self.r.clipboard_clear();self.r.clipboard_append(z.get("address","") or "");self.st.set("Address copied.")
 
-r=tk.Tk();App(r);r.mainloop()
+if __name__=="__main__":
+    r=tk.Tk();App(r);r.mainloop()

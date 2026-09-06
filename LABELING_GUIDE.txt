@@ -1,0 +1,37 @@
+HVAC AERIAL LABELING GUIDE
+
+Goal: label equipment that would make a commercial HVAC salesperson stop and investigate.
+Do not try to catalog every rooftop object.
+
+COOLING TOWER
+Box the tower/fluid cooler/evaporative heat-rejection unit itself. Single-cell and multi-cell units both count.
+
+AIR-COOLED CHILLER
+Box the complete chiller chassis. Favor genuinely large multi-fan/finned equipment over small condenser banks.
+
+LARGE PACKAGED HVAC
+Use only for genuinely large packaged RTU/AHU equipment that is interesting from a commercial service standpoint.
+Do not use this label for small ordinary rooftop units.
+
+PROCESS/HYDRONIC PIPING
+Box a meaningful visible piping run/cluster where its routing/scale is useful evidence. It is okay for the box to
+cover the visible connected run rather than tracing the pipe pixel by pixel.
+
+MECHANICAL YARD / PROCESS
+Box a coherent mechanical/process area when the overall arrangement is important even if individual machines are
+hard to identify.
+
+OTHER HIGH-VALUE MECHANICAL
+Use sparingly for clearly valuable mechanical equipment that does not fit the other classes.
+
+NEGATIVE IMAGE
+Mark Negative when NONE of the target high-value classes is present. Ordinary small condensers, splits, small RTUs,
+exhaust fans, vents and clean roofs are good negative examples. These negative images are important for preventing
+the future detector from repeating the false positives seen during generic-model testing.
+
+CONSISTENCY
+- Box the full visible equipment item when practical.
+- If equipment is partly occluded, box the visible footprint reasonably.
+- Do not box the same object multiple times in one image.
+- Multiple views of the same equipment are acceptable; the dataset should later be split by SITE, not by image,
+  so nearly identical images do not leak between training and validation sets.
