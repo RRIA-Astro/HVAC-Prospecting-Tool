@@ -258,7 +258,7 @@ import csv,os,zipfile
 from datetime import datetime,timezone
 from PIL import Image,ImageTk
 
-APP_VERSION="0.10.0"
+APP_VERSION="0.10.1"
 DATASET_NAME="HVAC_Training_Dataset"
 EQUIPMENT_CLASSES=[
     ("cooling_tower","Cooling tower / fluid cooler / evaporative heat rejection"),
@@ -293,17 +293,21 @@ def labels_json_path():return dataset_root()/"annotations.json"
 
 def load_dataset_labels():
     p=labels_json_path()
-    if not p.exists():return {"version":1,"classes":[k for k,_ in EQUIPMENT_CLASSES],"sites":{}}
+    if not p.exists():return {"version":2,"classes":[k for k,_ in EQUIPMENT_CLASSES],"sites":{}}
     try:
         d=json.loads(p.read_text())
-        d.setdefault("version",1);d.setdefault("classes",[k for k,_ in EQUIPMENT_CLASSES]);d.setdefault("sites",{})
+        d.setdefault("version",2);d.setdefault("classes",[k for k,_ in EQUIPMENT_CLASSES]);d.setdefault("sites",{})
+        # Migration happens after helper definitions are loaded, in App.__init__.
         return d
     except Exception:
-        return {"version":1,"classes":[k for k,_ in EQUIPMENT_CLASSES],"sites":{}}
+        return {"version":2,"classes":[k for k,_ in EQUIPMENT_CLASSES],"sites":{}}
 
 
 def save_dataset_labels(d):
     root=dataset_root();p=root/"annotations.json";tmp=root/"annotations.tmp.json"
+    d["version"]=2
+    for s in d.get("sites",{}).values():
+        for rec in s.get("images",[]):sync_training_label(rec)
     tmp.write_text(json.dumps(d,indent=2));tmp.replace(p)
     write_site_csv(d)
     (root/"classes.txt").write_text("\n".join(k for k,_ in EQUIPMENT_CLASSES)+"\n")
@@ -321,10 +325,28 @@ def write_site_csv(d):
                         s.get("notes",""),s.get("updated_utc","")])
 
 
-def ensure_yolo_label(image_record):
-    """Write normalized YOLO boxes. Empty files are valid negative examples."""
-    root=dataset_root();img_name=image_record.get("dataset_image")
-    if not img_name:return
+def image_review_state(rec):
+    """Return normalized review state and conservatively migrate v0.10.0 records."""
+    st=(rec.get("review_state") or "").upper()
+    if st in ("POSITIVE","NEGATIVE","UNREVIEWED"):
+        return st
+    # Conservative migration: only explicit boxes or explicit v0.10.0 negative
+    # count as reviewed. Ratings alone are NOT enough for detector training.
+    if rec.get("annotations"):
+        return "POSITIVE"
+    if rec.get("negative"):
+        return "NEGATIVE"
+    return "UNREVIEWED"
+
+
+def normalize_review_record(rec):
+    st=image_review_state(rec)
+    rec["review_state"]=st
+    rec["negative"]=(st=="NEGATIVE")  # backward compatibility
+    return rec
+
+
+def yolo_lines(image_record):
     w=float(image_record.get("width") or 1);h=float(image_record.get("height") or 1)
     lines=[]
     for a in image_record.get("annotations",[]):
@@ -334,12 +356,100 @@ def ensure_yolo_label(image_record):
         if x2-x1<2 or y2-y1<2:continue
         xc=(x1+x2)/(2*w);yc=(y1+y2)/(2*h);bw=(x2-x1)/w;bh=(y2-y1)/h
         lines.append(f"{CLASS_IDS[a['class']]} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
-    (root/"labels"/(Path(img_name).stem+".txt")).write_text("\n".join(lines)+("\n" if lines else ""))
+    return lines
 
 
-def export_dataset_zip():
+def sync_training_label(image_record):
+    """Keep working labels safe: unreviewed images have NO YOLO label file."""
+    root=dataset_root();img_name=image_record.get("dataset_image")
+    if not img_name:return
+    normalize_review_record(image_record)
+    lp=root/"labels"/(Path(img_name).stem+".txt")
+    st=image_record["review_state"]
+    if st=="UNREVIEWED":
+        # Remove stale v0.10.0 empty label files so unreviewed images cannot
+        # accidentally become training negatives.
+        if lp.exists():lp.unlink()
+        return
+    if st=="POSITIVE":
+        lines=yolo_lines(image_record)
+        # A reviewed positive must contain at least one valid target box.
+        if not lines:
+            if lp.exists():lp.unlink()
+            return
+        lp.write_text("\n".join(lines)+"\n")
+        return
+    # Reviewed negative: explicit empty label file is correct YOLO negative.
+    lp.write_text("")
+
+
+def migrate_review_states(d):
+    changed=False
+    for s in d.get("sites",{}).values():
+        for rec in s.get("images",[]):
+            old=rec.get("review_state")
+            normalize_review_record(rec)
+            if old!=rec.get("review_state"):changed=True
+            sync_training_label(rec)
+    return changed
+
+
+def export_training_safe_zip(d):
+    """Export ONLY explicitly reviewed detector images. Unreviewed images are excluded."""
     root=dataset_root();stamp=datetime.now().strftime("%Y%m%d_%H%M")
-    out=Path.home()/"Downloads"/f"{DATASET_NAME}_{stamp}.zip"
+    out=Path.home()/"Downloads"/f"{DATASET_NAME}_TRAINING_SAFE_{stamp}.zip"
+    safe_root="HVAC_Training_Dataset_SAFE"
+    reviewed_records=[];excluded=0;pos=neg=0;boxes=0
+
+    with zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED) as z:
+        z.writestr(f"{safe_root}/classes.txt","\n".join(k for k,_ in EQUIPMENT_CLASSES)+"\n")
+        z.writestr(f"{safe_root}/dataset.yaml",
+                   "path: .\ntrain: images\nval: images\nnames:\n"+
+                   "".join(f"  {i}: {k}\n" for i,(k,_) in enumerate(EQUIPMENT_CLASSES)))
+
+        for sk,s in d.get("sites",{}).items():
+            meta=s.get("meta",{})
+            for rec in s.get("images",[]):
+                normalize_review_record(rec);st=rec["review_state"]
+                if st=="UNREVIEWED":excluded+=1;continue
+                img_name=rec.get("dataset_image")
+                if not img_name:continue
+                ip=root/"images"/img_name
+                if not ip.exists():continue
+                lines=yolo_lines(rec) if st=="POSITIVE" else []
+                # Safety: positive without a valid box is excluded, not silently negative.
+                if st=="POSITIVE" and not lines:
+                    excluded+=1;continue
+                z.write(ip,f"{safe_root}/images/{img_name}")
+                label_name=Path(img_name).stem+".txt"
+                z.writestr(f"{safe_root}/labels/{label_name}","\n".join(lines)+("\n" if lines else ""))
+                boxes+=len(lines);pos+=1 if st=="POSITIVE" else 0;neg+=1 if st=="NEGATIVE" else 0
+                reviewed_records.append({
+                    "site_key":sk,"facility":meta.get("facility",""),"address":meta.get("address",""),
+                    "site_rating":s.get("rating","UNRATED"),"image":img_name,"label":rec.get("label",""),
+                    "review_state":st,"image_rating":rec.get("rating","UNRATED"),"boxes":len(lines),
+                    "image_notes":rec.get("image_notes","")
+                })
+
+        manifest="site_key,facility,address,site_rating,image,label,review_state,image_rating,boxes,image_notes\n"
+        import io
+        sio=io.StringIO();w=csv.writer(sio)
+        w.writerow(["site_key","facility","address","site_rating","image","label","review_state","image_rating","boxes","image_notes"])
+        for r in reviewed_records:w.writerow([r[k] for k in ("site_key","facility","address","site_rating","image","label","review_state","image_rating","boxes","image_notes")])
+        z.writestr(f"{safe_root}/review_manifest.csv",sio.getvalue())
+        z.writestr(f"{safe_root}/README.txt",
+                   f"Training-safe export created by HVAC Territory Discovery v0.10.1.\n\n"
+                   f"Reviewed positive images: {pos}\nReviewed negative images: {neg}\n"
+                   f"Target boxes: {boxes}\nExcluded/unreviewed images: {excluded}\n\n"
+                   "Only explicitly reviewed images are included. Positive images without at least one valid target box are excluded.\n"
+                   "Negative images contain explicit empty YOLO label files.\n"
+                   "Unreviewed images are intentionally absent and must never be treated as negatives.\n")
+    return out,{"positive":pos,"negative":neg,"boxes":boxes,"excluded":excluded,"reviewed":pos+neg}
+
+
+def export_full_backup_zip():
+    root=dataset_root();stamp=datetime.now().strftime("%Y%m%d_%H%M")
+    out=Path.home()/"Downloads"/f"{DATASET_NAME}_FULL_BACKUP_{stamp}.zip"
     with zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED) as z:
         for p in root.rglob("*"):
             if p.is_file():z.write(p,p.relative_to(root.parent))
@@ -367,7 +477,8 @@ class ReviewWindow:
             dataset_name=f"{safe}_{safe_name(label)}.jpg"
             dst=self.root/"images"/dataset_name
             if not dst.exists():shutil.copy2(p,dst)
-            rec=existing.get(label,{"label":label,"annotations":[],"negative":False,"image_notes":"","rating":"UNRATED"})
+            rec=existing.get(label,{"label":label,"annotations":[],"negative":False,"image_notes":"","rating":"UNRATED","review_state":"UNREVIEWED"})
+            normalize_review_record(rec)
             rec.update({"dataset_image":dataset_name,"width":w,"height":h,"building_sqft":b.get("sq") if b else None,
                         "building_lon":b.get("lon") if b else None,"building_lat":b.get("lat") if b else None})
             out.append(rec)
@@ -408,8 +519,15 @@ class ReviewWindow:
         self.class_desc=tk.StringVar();ttk.Label(right,textvariable=self.class_desc,wraplength=330).pack(anchor="w")
         self.class_box.bind("<<ComboboxSelected>>",lambda e:self.update_class_desc());self.update_class_desc()
 
-        self.negative=tk.BooleanVar();ttk.Checkbutton(right,text="Negative image: no target equipment",variable=self.negative,command=self.neg_changed).pack(anchor="w",pady=(8,3))
-        ttk.Label(right,text="Use Negative when no HIGH-VALUE target class is present. Ordinary small RTUs, splits and residential-style condensers are background and should NOT be boxed.",wraplength=330).pack(anchor="w")
+        ttk.Separator(right).pack(fill="x",pady=8)
+        ttk.Label(right,text="TRAINING REVIEW STATE",font=("Segoe UI",10,"bold")).pack(anchor="w")
+        self.review_state=tk.StringVar(value="UNREVIEWED")
+        rs=ttk.Frame(right);rs.pack(fill="x",pady=3)
+        ttk.Radiobutton(rs,text="Positive",value="POSITIVE",variable=self.review_state,command=self.review_state_changed).pack(side="left")
+        ttk.Radiobutton(rs,text="Negative",value="NEGATIVE",variable=self.review_state,command=self.review_state_changed).pack(side="left",padx=8)
+        ttk.Radiobutton(rs,text="Unreviewed",value="UNREVIEWED",variable=self.review_state,command=self.review_state_changed).pack(side="left")
+        ttk.Label(right,text="Positive = all visible target equipment is boxed. Negative = reviewed and no target equipment is present. Unreviewed images are EXCLUDED from training.",wraplength=330).pack(anchor="w")
+        self.progress_var=tk.StringVar();ttk.Label(right,textvariable=self.progress_var,font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(6,0))
 
         ttk.Label(right,text="IMAGE / BUILDING RATING",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(10,2))
         self.image_rating=tk.StringVar(value="UNRATED")
@@ -433,17 +551,21 @@ class ReviewWindow:
 
     def persist_current_fields(self):
         if not self.images:return
-        rec=self.images[self.idx];rec["negative"]=bool(self.negative.get());rec["image_notes"]=self.image_notes.get("1.0","end").strip();rec["rating"]=self.image_rating.get()
+        rec=self.images[self.idx]
+        rec["review_state"]=self.review_state.get();rec["negative"]=(rec["review_state"]=="NEGATIVE")
+        rec["image_notes"]=self.image_notes.get("1.0","end").strip();rec["rating"]=self.image_rating.get()
         self.site["rating"]=self.rating.get();self.site["notes"]=self.notes.get("1.0","end").strip();self.site["updated_utc"]=datetime.now(timezone.utc).isoformat()
 
     def load_image(self):
         if not self.images:return
         rec=self.images[self.idx];p=self.root/"images"/rec["dataset_image"]
         self.current_pil=Image.open(p).convert("RGB")
-        self.imgtitle.set(f"{self.idx+1}/{len(self.images)} — {rec['label']} — {rec.get('building_sqft') or 'campus'}")
-        self.negative.set(bool(rec.get("negative",False)));self.image_rating.set(rec.get("rating","UNRATED"))
+        st=image_review_state(rec);rec["review_state"]=st
+        mark={"POSITIVE":"✓ POSITIVE","NEGATIVE":"✓ NEGATIVE","UNREVIEWED":"? UNREVIEWED"}[st]
+        self.imgtitle.set(f"{self.idx+1}/{len(self.images)} — {mark} — {rec['label']} — {rec.get('building_sqft') or 'campus'}")
+        self.review_state.set(st);self.image_rating.set(rec.get("rating","UNRATED"))
         self.image_notes.delete("1.0","end");self.image_notes.insert("1.0",rec.get("image_notes","") or "")
-        self.refresh_list();self.render()
+        self.refresh_list();self.update_progress();self.render()
 
     def render(self):
         if not self.current_pil:return
@@ -465,7 +587,7 @@ class ReviewWindow:
         return max(0,min(w,ix)),max(0,min(h,iy))
 
     def on_press(self,e):
-        if self.negative.get():return
+        if self.review_state.get()=="NEGATIVE":return
         self.drag_start=(e.x,e.y);self.temp_rect=self.canvas.create_rectangle(e.x,e.y,e.x,e.y,outline="#00ff99",width=2,dash=(4,2))
     def on_drag(self,e):
         if self.drag_start and self.temp_rect:self.canvas.coords(self.temp_rect,self.drag_start[0],self.drag_start[1],e.x,e.y)
@@ -477,7 +599,8 @@ class ReviewWindow:
         x1,x2=sorted((a[0],b[0]));y1,y2=sorted((a[1],b[1]))
         if x2-x1<8 or y2-y1<8:return
         self.images[self.idx].setdefault("annotations",[]).append({"class":self.class_var.get(),"x1":round(x1,1),"y1":round(y1,1),"x2":round(x2,1),"y2":round(y2,1)})
-        self.negative.set(False);self.refresh_list();self.render()
+        self.review_state.set("POSITIVE");self.images[self.idx]["review_state"]="POSITIVE";self.images[self.idx]["negative"]=False
+        self.refresh_list();self.update_progress();self.render()
 
     def refresh_list(self):
         self.listbox.delete(0,"end")
@@ -490,11 +613,29 @@ class ReviewWindow:
     def clear_boxes(self):
         if messagebox.askyesno("Clear annotations","Delete all boxes on this image?",parent=self.win):
             self.images[self.idx]["annotations"]=[];self.refresh_list();self.render()
-    def neg_changed(self):
-        if self.negative.get() and self.images[self.idx].get("annotations"):
-            if messagebox.askyesno("Negative image","Marking this image negative will delete its equipment boxes. Continue?",parent=self.win):
-                self.images[self.idx]["annotations"]=[];self.refresh_list();self.render()
-            else:self.negative.set(False)
+    def review_state_changed(self):
+        if not self.images:return
+        rec=self.images[self.idx];st=self.review_state.get()
+        if st=="NEGATIVE" and rec.get("annotations"):
+            if messagebox.askyesno("Reviewed negative","Marking this image NEGATIVE will delete its target boxes. Continue?",parent=self.win):
+                rec["annotations"]=[];self.refresh_list();self.render()
+            else:
+                self.review_state.set(image_review_state(rec));return
+        if st=="POSITIVE" and not rec.get("annotations"):
+            messagebox.showinfo("Positive needs boxes","Draw boxes around ALL visible target equipment before marking this image Positive. The image will remain Unreviewed until at least one valid target box exists.",parent=self.win)
+            self.review_state.set("UNREVIEWED");st="UNREVIEWED"
+        rec["review_state"]=st;rec["negative"]=(st=="NEGATIVE")
+        self.update_progress()
+
+    def update_progress(self):
+        pos=neg=un=0
+        for rec in self.images:
+            st=image_review_state(rec)
+            if st=="POSITIVE":pos+=1
+            elif st=="NEGATIVE":neg+=1
+            else:un+=1
+        self.progress_var.set(f"Reviewed {pos+neg}/{len(self.images)} | Positive {pos} | Negative {neg} | Unreviewed {un}")
+
     def prev(self):
         self.persist_current_fields()
         if self.idx>0:self.idx-=1;self.load_image()
@@ -503,28 +644,34 @@ class ReviewWindow:
         if self.idx<len(self.images)-1:self.idx+=1;self.load_image()
     def save(self):
         self.persist_current_fields()
-        for rec in self.images:ensure_yolo_label(rec)
-        save_dataset_labels(self.data);self.app.apply_human_labels();self.app.refresh()
-        self.app.st.set(f"Saved labels for {self.z.get('facility') or self.z.get('address')} to {dataset_root()}")
+        # Safety: a positive image without boxes is never considered reviewed.
+        for rec in self.images:
+            if image_review_state(rec)=="POSITIVE" and not yolo_lines(rec):
+                rec["review_state"]="UNREVIEWED";rec["negative"]=False
+            sync_training_label(rec)
+        save_dataset_labels(self.data);self.app.apply_human_labels();self.app.refresh();self.update_progress()
+        self.app.st.set(f"Saved training-safe review state for {self.z.get('facility') or self.z.get('address')} to {dataset_root()}")
     def close(self):
         self.save();self.win.destroy()
 
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];self.label_data=load_dataset_labels();r.title("HVAC Territory Discovery v0.10.0 — Review & Label");r.geometry("1600x900")
+        self.r=r;self.rows=[];self.label_data=load_dataset_labels()
+        if migrate_review_states(self.label_data):save_dataset_labels(self.label_data)
+        r.title("HVAC Territory Discovery v0.10.1 — Training-Safe Review & Label");r.geometry("1650x900")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach test center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)
         ttk.Label(t,text="Radius mi:").grid(row=0,column=2);self.rad=tk.StringVar(value="1.0");ttk.Entry(t,textvariable=self.rad,width=6).grid(row=0,column=3)
         ttk.Label(t,text="Size threshold ft²:").grid(row=0,column=4);self.mn=tk.StringVar(value="10000");ttk.Entry(t,textvariable=self.mn,width=8).grid(row=0,column=5)
         self.b=ttk.Button(t,text="Discover + Prescreen",command=self.start);self.b.grid(row=0,column=6,padx=8)
-        self.st=tk.StringVar(value="GIS discovery + human review. Labels build a reusable HVAC aerial training dataset.")
+        self.st=tk.StringVar(value="GIS discovery + training-safe human review. UNREVIEWED images are excluded from detector training.")
         ttk.Label(r,textvariable=self.st).pack(fill="x",padx=10)
 
-        cs=("rank","facility","address","largest","bldgs","inspect","miles","land","tier","pre","gis","human","boxes","source")
+        cs=("rank","facility","address","largest","bldgs","inspect","miles","land","tier","pre","gis","human","reviewed","boxes","source")
         self.tree=ttk.Treeview(r,columns=cs,show="headings")
-        widths=(45,230,190,80,55,60,60,170,70,55,55,80,60,95)
+        widths=(45,220,185,80,55,60,60,160,70,55,55,75,85,55,95)
         for c,w in zip(cs,widths):self.tree.heading(c,text=c.upper());self.tree.column(c,width=w,anchor="w")
         self.tree.pack(fill="both",expand=True,padx=10,pady=8)
         self.tree.bind("<Double-1>",lambda e:self.review_selected())
@@ -533,7 +680,8 @@ class App:
         ttk.Button(f,text="Download Aerial",command=self.dl).pack(side="left")
         ttk.Button(f,text="Save Campus Images",command=self.save_campus).pack(side="left",padx=8)
         ttk.Button(f,text="Review / Label Selected",command=self.review_selected).pack(side="left",padx=8)
-        ttk.Button(f,text="Export Dataset ZIP",command=self.export_zip).pack(side="left",padx=8)
+        ttk.Button(f,text="Export Training-Safe ZIP",command=self.export_zip).pack(side="left",padx=8)
+        ttk.Button(f,text="Full Dataset Backup",command=self.export_backup).pack(side="left",padx=8)
         ttk.Button(f,text="Copy Address",command=self.copy).pack(side="left",padx=8)
         ttk.Button(f,text="Dataset Summary",command=self.dataset_summary).pack(side="right",padx=8)
 
@@ -548,12 +696,14 @@ class App:
         sites=self.label_data.get("sites",{})
         for z in self.rows:
             s=sites.get(site_key(z),{});z["human_rating"]=s.get("rating","") if s.get("rating")!="UNRATED" else ""
-            z["human_boxes"]=sum(len(x.get("annotations",[])) for x in s.get("images",[]))
+            ims=s.get("images",[]);reviewed=sum(1 for x in ims if image_review_state(x)!="UNREVIEWED")
+            z["human_reviewed"]=f"{reviewed}/{len(ims)}" if ims else ""
+            z["human_boxes"]=sum(len(x.get("annotations",[])) for x in ims if image_review_state(x)=="POSITIVE")
     def rowvals(self,n,z):
         fmt=lambda v:f"{v:,}" if v is not None else "UNKNOWN"
         return (n,z.get("facility","") or "",z.get("address","") or "",fmt(z.get("largest")),z.get("count",0),len(meaningful_buildings(z)),
                 z.get("distance",""),z.get("land",""),z.get("tier",""),"YES" if z.get("pre") else "NO",z.get("score",""),
-                z.get("human_rating",""),z.get("human_boxes",0),z.get("source",""))
+                z.get("human_rating",""),z.get("human_reviewed",""),z.get("human_boxes",0),z.get("source",""))
     def show(self):
         for i in self.tree.get_children():self.tree.delete(i)
         for n,z in enumerate(self.rows,1):self.tree.insert("","end",iid=str(n-1),values=self.rowvals(n,z))
@@ -598,21 +748,41 @@ class App:
                 work=Path(tempfile.gettempdir())/f"hvac_label_{safe}_{abs(hash((z.get('lon'),z.get('lat'))))}"
                 imgs=campus_images(z,work)
                 self.r.after(0,lambda imgs=imgs:ReviewWindow(self,z,imgs))
-                self.r.after(0,lambda:self.st.set("Review images ready. Draw boxes around known equipment."))
+                self.r.after(0,lambda:self.st.set("Review images ready. Explicitly mark each image Positive, Negative, or leave Unreviewed."))
             except Exception as e:self.r.after(0,lambda e=e:self.st.set("Review failed: "+repr(e)))
         threading.Thread(target=w,daemon=True).start()
     def export_zip(self):
-        try:save_dataset_labels(self.label_data);out=export_dataset_zip();self.st.set(f"Dataset exported: {out}")
+        try:
+            save_dataset_labels(self.label_data);out,stats=export_training_safe_zip(self.label_data)
+            self.st.set(f"Training-safe dataset exported: {out} | reviewed {stats['reviewed']} | excluded {stats['excluded']}")
+            msg=(f"Saved:\n{out}\n\nReviewed images: {stats['reviewed']}\n"
+                 f"Positive: {stats['positive']}\nNegative: {stats['negative']}\n"
+                 f"Boxes: {stats['boxes']}\nExcluded/unreviewed: {stats['excluded']}")
+            messagebox.showinfo("Training-Safe Export",msg)
         except Exception as e:self.st.set("Dataset export failed: "+repr(e))
+    def export_backup(self):
+        try:
+            save_dataset_labels(self.label_data);out=export_full_backup_zip();self.st.set(f"Full dataset backup exported: {out}")
+        except Exception as e:self.st.set("Backup export failed: "+repr(e))
     def dataset_summary(self):
-        sites=self.label_data.get("sites",{});ratings={k:0 for k in ("GOOD","MAYBE","POOR","UNRATED")};boxes=neg=images=0;counts={k:0 for k,_ in EQUIPMENT_CLASSES}
+        sites=self.label_data.get("sites",{});ratings={k:0 for k in ("GOOD","MAYBE","POOR","UNRATED")}
+        boxes=pos=neg=un=images=0;counts={k:0 for k,_ in EQUIPMENT_CLASSES}
         for s in sites.values():
             ratings[s.get("rating","UNRATED")]=ratings.get(s.get("rating","UNRATED"),0)+1
             for rec in s.get("images",[]):
-                images+=1;neg+=1 if rec.get("negative") else 0
-                for a in rec.get("annotations",[]):boxes+=1;counts[a.get("class")]=counts.get(a.get("class"),0)+1
-        txt=f"Sites: {len(sites)}\nGOOD {ratings.get('GOOD',0)} | MAYBE {ratings.get('MAYBE',0)} | POOR {ratings.get('POOR',0)} | UNRATED {ratings.get('UNRATED',0)}\nImages: {images} | negative images: {neg} | boxes: {boxes}\n\n"
-        txt+="\n".join(f"{k}: {counts.get(k,0)}" for k,_ in EQUIPMENT_CLASSES);messagebox.showinfo("Training Dataset Summary",txt)
+                images+=1;st=image_review_state(rec)
+                if st=="POSITIVE":pos+=1
+                elif st=="NEGATIVE":neg+=1
+                else:un+=1
+                if st=="POSITIVE":
+                    for a in rec.get("annotations",[]):
+                        boxes+=1;counts[a.get("class")]=counts.get(a.get("class"),0)+1
+        txt=(f"Sites: {len(sites)}\nGOOD {ratings.get('GOOD',0)} | MAYBE {ratings.get('MAYBE',0)} | POOR {ratings.get('POOR',0)} | UNRATED {ratings.get('UNRATED',0)}\n\n"
+             f"Images: {images}\nReviewed: {pos+neg}/{images} | Positive {pos} | Negative {neg} | Unreviewed {un}\n"
+             f"Training-safe target boxes: {boxes}\n\n")
+        txt+="\n".join(f"{k}: {counts.get(k,0)}" for k,_ in EQUIPMENT_CLASSES)
+        txt+="\n\nOnly Positive and Negative images are included in Training-Safe export. Unreviewed images are excluded."
+        messagebox.showinfo("Training Dataset Summary",txt)
     def copy(self):
         i=self.selidx()
         if i is not None:

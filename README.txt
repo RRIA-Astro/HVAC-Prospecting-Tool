@@ -1,68 +1,51 @@
-HVAC Territory Discovery v0.10.0 — Review & Label
+HVAC Territory Discovery v0.10.1 — Training-Safe Review & Label
 
 PURPOSE
-v0.10.0 stops trying to make a generic vision model definitively identify HVAC equipment.
-It preserves the GIS/campus discovery work and turns the application into a human-in-the-loop
-prospecting and training-data tool.
+Prevent unreviewed aerial images from silently becoming negative detector-training examples.
 
-NO OPENAI API KEY IS REQUIRED IN THIS VERSION.
+IMAGE REVIEW STATES
 
-PRIMARY WORKFLOW
-1. Discover + Prescreen an area.
-2. Select a property.
-3. Click Review / Label Selected (or double-click the row).
-4. Review the campus overview and each meaningful building image.
-5. Give the SITE a GOOD / MAYBE / POOR rating.
-6. On each image, select a high-value equipment class and drag a box around known equipment.
-7. Mark an image Negative when none of the high-value target classes is present.
-8. Add notes if useful and Save.
-9. Repeat. The tool is now creating a reusable labeled aerial dataset from expert review.
+POSITIVE
+- The image has been fully inspected.
+- At least one high-value target is present.
+- ALL visible target-class equipment should be boxed.
+- A Positive image without a valid box is automatically treated as UNREVIEWED.
 
-TARGET OBJECT CLASSES
-0 cooling_tower
-1 air_cooled_chiller
-2 large_packaged_hvac
-3 process_hydronic_piping
-4 mechanical_yard_process
-5 other_high_value_mechanical
+NEGATIVE
+- The image has been fully inspected.
+- No target-class equipment is present.
+- Ordinary small RTUs, splits, residential/light-commercial condensers and vents are background.
+- An explicit empty YOLO label file is created.
 
-IMPORTANT NEGATIVE-EXAMPLE RULE
-Small residential/light-commercial condensers, mini-splits, ordinary small RTUs, vents and similar
-low-value equipment are BACKGROUND, not target classes. If an image contains only that kind of
-mechanical equipment, mark the image Negative instead of drawing boxes around it.
+UNREVIEWED
+- Not safe for detector training.
+- No YOLO label file is kept.
+- Excluded from Training-Safe export.
 
-This design directly teaches a future detector the difference between:
-- 912-type high-value chiller opportunities, and
-- 589/928-type ordinary low-value HVAC sites.
+MIGRATION FROM v0.10.0
+Conservative migration is automatic:
+- Existing image with target boxes -> POSITIVE.
+- Existing image explicitly marked Negative -> NEGATIVE.
+- Everything else -> UNREVIEWED, even if it had a GOOD/MAYBE/POOR image or site rating.
 
-LABELING WINDOW
-- Campus overview + building-centered images.
-- Site GOOD/MAYBE/POOR rating.
-- Image/building GOOD/MAYBE/POOR rating.
-- Draw equipment bounding boxes with click-drag.
-- Delete individual boxes or clear an image.
-- Mark clean/low-value images as Negative.
-- Site notes and image notes.
+NEW UI
+- Explicit Positive / Negative / Unreviewed state for every image.
+- Progress counter: Reviewed X/Y | Positive X | Negative X | Unreviewed X.
+- Discovery table shows reviewed-image progress for saved sites.
+- Drawing a target box automatically marks the image Positive.
+- Marking an annotated image Negative asks before deleting its target boxes.
 
-DATASET LOCATION
-The app writes persistent data under:
-  Downloads/HVAC_Training_Dataset/
+EXPORT TRAINING-SAFE ZIP
+- Includes ONLY reviewed Positive and Negative images.
+- Positive images include YOLO boxes.
+- Negative images include explicit empty YOLO label files.
+- Unreviewed images are absent.
+- Positive images without a valid box are excluded.
+- Includes classes.txt, dataset.yaml, review_manifest.csv and README.txt.
 
-FILES CREATED
-- annotations.json        Full metadata, site labels, image labels, boxes and notes.
-- site_labels.csv         Easy-to-review site-level ratings.
-- classes.txt             Detector class order.
-- images/                 The exact aerial images that were labeled.
-- labels/                 YOLO-format bounding-box files. Empty files are valid negative images.
+FULL DATASET BACKUP
+- Copies the entire working HVAC_Training_Dataset folder, including unreviewed material.
+- Use for backup/transfer only, not direct model training.
 
-EXPORT
-Click Export Dataset ZIP to create a timestamped ZIP in Downloads.
-This makes it easy to upload the growing dataset later for model training.
-
-DATASET SUMMARY
-Shows number of sites, site ratings, images, negative images, total bounding boxes and class counts.
-Use this to see where the training set is thin.
-
-DISCOVERY
-This build intentionally keeps the existing Virginia Beach GIS/aerial pipeline so labeling can begin
-immediately. Geographic portability should be handled separately after the labeling workflow is stable.
+IMPORTANT
+For a Positive image, box every visible instance of every target class. An unboxed visible target can otherwise be learned as background.
