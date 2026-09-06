@@ -1,29 +1,52 @@
-HVAC Territory Discovery v0.9.10 — Calibrated Sales Scoring
+HVAC Territory Discovery v0.9.11
+Sales Triage + Equipment Breakdown
 
-PURPOSE
-Calibrate deterministic scoring using:
-- 912 Birdneck as a positive control (large ground-mounted multi-fan chiller)
-- 589 Birdneck as a negative control (ordinary light-industrial building with small side-mounted packaged HVAC)
+WHY THIS VERSION
+Repeated testing showed that Deep Vision's equipment observations are often more useful than forcing all uncertainty into one 0-100 score. v0.9.11 therefore makes the equipment breakdown primary and the old score secondary/diagnostic.
 
-CHANGES FROM v0.9.7
-1. POSSIBLE chiller/tower evidence can no longer create a GOOD score.
-2. A single PROBABLE chiller/tower view normally creates MAYBE, not GOOD.
-3. GOOD from deterministic rules requires stronger evidence:
-   - STRONG high-value equipment morphology, OR
-   - PROBABLE evidence repeated across views, OR
-   - PROBABLE evidence plus independent piping/mechanical-yard corroboration.
-4. Large packaged HVAC alone is capped at a MAYBE rule floor.
-5. Missing piping still never subtracts from a credible chiller/tower candidate.
-6. Vision instructions now emphasize physical scale using cars, parking stalls,
-   doors, roof curbs and building dimensions, and explicitly warn against
-   confusing small side-mounted packaged units with large chillers.
-7. Existing campus non-dilution behavior remains intact.
+PRIMARY SALES TRIAGE
+HIGH
+- Strong high-value central/process signal.
+- Examples: strong chiller/tower morphology, repeated probable chiller/tower evidence, strong repeated hydronic/process piping.
+- One HIGH building makes the campus HIGH.
 
-FIRST TEST
-Run 912 Birdneck and 589 Birdneck before broader testing.
-Desired behavior:
-- 912: GOOD or strong MAYBE that clearly identifies the large chiller candidate.
-- 589: POOR/MAYBE, but NOT promoted to GOOD by the deterministic rule.
+REVIEW
+- Credible but ambiguous higher-value equipment.
+- Examples: probable chiller/tower in one view, repeated possible chiller/tower, probable/strong process piping, meaningful large packaged HVAC or mechanical-yard evidence.
+- Intended action: salesperson opens the aerial and decides quickly.
 
+LOW
+- Ordinary/local HVAC only or no credible high-value signal.
+- Small condensers, splits, residential-style equipment, small RTUs and ordinary vents should normally remain LOW.
 
-v0.9.10 calibration: suppresses low-value-only small/local HVAC false positives; weak MAYBE buildings no longer accumulate into a stronger campus. High-value chiller/tower/process evidence remains recall-biased.
+IMPORTANT
+Triage does NOT use the opaque 0-100 score. The old Deep Vision score is retained only as a diagnostic.
+Poor buildings never dilute a stronger building.
+Campus overview can rescue LOW to REVIEW if detached/inter-building mechanical equipment is visible, but one overview image cannot create HIGH by itself.
+
+NEW DISCOVERY COLUMNS AFTER ANALYSIS
+- TRIAGE
+- CHILLER
+- TOWER
+- LARGE packaged HVAC
+- PIPE
+- YARD
+Each shows a compact status such as PROB 68%/2v.
+
+NEW BUTTON
+Equipment Details
+Opens a building-by-building report with:
+- equipment status
+- confidence
+- number of positive views
+- evidence text
+- best crop/view
+- triage reason
+- model synthesis
+
+SUGGESTED REGRESSION SET
+717 General Booth: HIGH expected
+912 Birdneck: REVIEW or HIGH acceptable; chiller candidate must remain visible
+949 Birdneck: REVIEW expected
+589 Birdneck: LOW preferred; REVIEW tolerable only if detector produces a genuine high-value candidate
+928 Birdneck: LOW expected

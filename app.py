@@ -412,7 +412,7 @@ def _best_signal(obs, field):
 
 def deterministic_sales_score(obs, model_result):
     """
-    v0.9.10 rule-engine correction.
+    v0.9.11 rule-engine correction.
 
     GOOD requires a qualified high-value anchor. Weak/ambiguous mechanical
     evidence may remain MAYBE for human review, but the deterministic layer
@@ -504,7 +504,7 @@ def deterministic_sales_score(obs, model_result):
         adjusted_raw=min(adjusted_raw,39); floor=min(floor,39)
         reasons.append("low-value-only safeguard")
     elif not qualified_anchor:
-        # Critical v0.9.10 guardrail: GPT may call an ambiguous site GOOD, but
+        # Critical v0.9.11 guardrail: GPT may call an ambiguous site GOOD, but
         # without a qualified central/process anchor it remains a human-review
         # MAYBE. This preserves recall without labeling ordinary sites GOOD.
         adjusted_raw=min(adjusted_raw,62); floor=min(floor,62)
@@ -523,6 +523,107 @@ def deterministic_sales_score(obs, model_result):
     }
 
 
+
+TRIAGE_RANK={"LOW":0,"REVIEW":1,"HIGH":2}
+
+def equipment_breakdown(obs):
+    """Preserve what Deep Vision actually thinks it sees, independent of the sales score."""
+    return {
+        "air_cooled_chiller": _best_signal(obs,"air_cooled_chillers"),
+        "cooling_tower": _best_signal(obs,"cooling_towers"),
+        "large_packaged_hvac": _best_signal(obs,"large_packaged_hvac"),
+        "small_packaged_hvac": _best_signal(obs,"small_packaged_hvac"),
+        "condensers": _best_signal(obs,"condensers"),
+        "piping": _best_signal(obs,"piping"),
+        "mechanical_yard": _best_signal(obs,"mechanical_yard"),
+    }
+
+def sales_triage(bd):
+    """
+    Equipment-first sales triage.
+    HIGH = strong evidence of genuinely high-value central/process equipment.
+    REVIEW = credible anomaly / ambiguous higher-value equipment worth a human look.
+    LOW = only ordinary/local HVAC or no meaningful high-value signal.
+
+    This intentionally does NOT use the opaque 0-100 score.
+    """
+    ch=bd["air_cooled_chiller"]; tw=bd["cooling_tower"]; pp=bd["piping"]
+    lg=bd["large_packaged_hvac"]; my=bd["mechanical_yard"]
+
+    reasons=[]
+
+    # HIGH: strong morphology, repeated probable evidence, or strong process-water evidence.
+    if ch["status"]=="strong" and ch["confidence"]>=65:
+        reasons.append(f"strong chiller signal {ch['confidence']}%")
+    if tw["status"]=="strong" and tw["confidence"]>=65:
+        reasons.append(f"strong tower/heat-rejection signal {tw['confidence']}%")
+    if ch.get("probable_views",0)>=2 and ch["confidence"]>=60:
+        reasons.append(f"chiller probable in {ch['probable_views']} views")
+    if tw.get("probable_views",0)>=2 and tw["confidence"]>=60:
+        reasons.append(f"tower probable in {tw['probable_views']} views")
+    if pp["status"]=="strong" and pp["confidence"]>=75 and pp["views"]>=2:
+        reasons.append(f"strong process/hydronic piping across {pp['views']} views")
+    high = bool(reasons)
+
+    # A strong mechanical-yard signal is HIGH only when another high-value channel supports it.
+    if (not high and my["status"]=="strong" and my["confidence"]>=75 and
+        (ch["status"] in ("probable","strong") or tw["status"] in ("probable","strong") or
+         pp["status"] in ("probable","strong"))):
+        high=True; reasons.append("strong mechanical yard with high-value corroboration")
+
+    if high:
+        return "HIGH", reasons
+
+    # REVIEW: preserve ambiguous high-value candidates rather than discard them.
+    review=[]
+    for sig,name in ((ch,"chiller"),(tw,"tower/heat rejection")):
+        if sig["status"]=="probable":
+            review.append(f"{name} probable {sig['confidence']}%")
+        elif sig["status"]=="possible" and (sig["views"]>=2 or sig["confidence"]>=50):
+            review.append(f"{name} possible {sig['confidence']}% in {sig['views']} view(s)")
+    if pp["status"] in ("probable","strong"):
+        review.append(f"piping {pp['status']} {pp['confidence']}%")
+    if lg["status"] in ("probable","strong") and lg["confidence"]>=55:
+        review.append(f"large packaged HVAC {lg['status']} {lg['confidence']}%")
+    if my["status"] in ("probable","strong") and my["confidence"]>=60:
+        review.append(f"mechanical yard {my['status']} {my['confidence']}%")
+
+    if review:
+        return "REVIEW", review
+
+    return "LOW", ["ordinary/local HVAC only or no credible high-value equipment signal"]
+
+def sig_compact(sig):
+    st=sig.get("status","not_observed")
+    if st=="not_observed":
+        return "—"
+    tag={"strong":"STR","probable":"PROB","possible":"POSS"}.get(st,st.upper())
+    return f"{tag} {sig.get('confidence',0)}%/{sig.get('views',0)}v"
+
+def aggregate_equipment(buildings):
+    """Strongest physical-building signal for each equipment family."""
+    fields=("air_cooled_chiller","cooling_tower","large_packaged_hvac",
+            "small_packaged_hvac","condensers","piping","mechanical_yard")
+    out={}
+    for field in fields:
+        candidates=[]
+        for br in buildings:
+            if br.get("building",0)<=0:
+                continue
+            bd=(br.get("result") or {}).get("equipment_breakdown") or {}
+            sig=bd.get(field)
+            if sig:
+                candidates.append(sig)
+        if candidates:
+            out[field]=max(candidates,key=lambda s:(STATUS_RANK.get(s.get("status","not_observed"),0),
+                                                    int(s.get("confidence",0) or 0),
+                                                    int(s.get("views",0) or 0)))
+        else:
+            out[field]={"status":"not_observed","confidence":0,"views":0,
+                        "strong_views":0,"probable_views":0,"best_view":"","evidence":""}
+    return out
+
+
 def deep_run_building(c,path,label,progress):
     views=dv_crops(path);obs=[];use=[0,0]
     for i,(vlabel,p) in enumerate(views):
@@ -536,7 +637,7 @@ def deep_run_building(c,path,label,progress):
     try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
     except:pass
 
-    # v0.9.10: GPT performs equipment recognition; deterministic business rules
+    # v0.9.11: GPT performs equipment recognition; deterministic business rules
     # establish the minimum sales-prospect score. This prevents "no visible
     # water loop" from vetoing a credible large chiller/tower anomaly.
     sales_score,sales_class,sales_trace=deterministic_sales_score(obs,x)
@@ -545,6 +646,14 @@ def deep_run_building(c,path,label,progress):
     x["score"]=sales_score
     x["class"]=sales_class
     x["sales_trace"]=sales_trace
+
+    # v0.9.11: preserve equipment observations separately from the score.
+    bd=equipment_breakdown(obs)
+    triage,triage_reasons=sales_triage(bd)
+    x["equipment_breakdown"]=bd
+    x["triage"]=triage
+    x["triage_reasons"]=triage_reasons
+
     if sales_trace["rule_floor"] > sales_trace["model_score"]:
         why="; ".join(sales_trace["reasons"][:3])
         x["summary"]=f'{x.get("summary","")} SALES RULE FLOOR {sales_trace["rule_floor"]}: {why}.'
@@ -573,7 +682,14 @@ def deep_run_campus(key,z,root,progress):
     try:
         progress("Campus overview context...")
         ov,r=dv_ask(c,IP,[{"type":"input_image","image_url":dv_url(imgs[0][1]),"detail":"high"}],OBS,"campus_overview")
-        results.append({"building":0,"sqft":None,"result":{"class":"MAYBE","score":50,"confidence":50,"cooling_towers":json.dumps(ov["cooling_towers"]),"air_cooled_chillers":json.dumps(ov["air_cooled_chillers"]),"large_packaged_hvac":json.dumps(ov["large_packaged_hvac"]),"small_packaged_hvac":json.dumps(ov["small_packaged_hvac"]),"piping":json.dumps(ov["piping"]),"central_system_evidence":json.dumps(ov["mechanical_yard"]),"ambiguities":[],"summary":"Campus overview context only."}})
+        ov_bd=equipment_breakdown([{"view":"campus overview","observations":ov}])
+        ov_triage,ov_reasons=sales_triage(ov_bd)
+        results.append({"building":0,"sqft":None,"result":{"class":"MAYBE","score":50,"confidence":50,
+            "cooling_towers":json.dumps(ov["cooling_towers"]),"air_cooled_chillers":json.dumps(ov["air_cooled_chillers"]),
+            "large_packaged_hvac":json.dumps(ov["large_packaged_hvac"]),"small_packaged_hvac":json.dumps(ov["small_packaged_hvac"]),
+            "piping":json.dumps(ov["piping"]),"central_system_evidence":json.dumps(ov["mechanical_yard"]),
+            "ambiguities":[],"summary":"Campus overview context only.",
+            "equipment_breakdown":ov_bd,"triage":ov_triage,"triage_reasons":ov_reasons}})
         try:use[0]+=r.usage.input_tokens;use[1]+=r.usage.output_tokens
         except:pass
     except Exception as e:errors.append(f"Campus overview: {type(e).__name__}: {e}")
@@ -608,11 +724,28 @@ def deep_run_campus(key,z,root,progress):
         final["class"]="GOOD" if final["score"]>=65 else "MAYBE" if final["score"]>=40 else "POOR"
         positive=[x["building"] for x in physical if x["result"].get("class") in ("GOOD","MAYBE")]
         final["high_value_buildings"]=sorted(set(final.get("high_value_buildings",[])+positive))
+
+        # Equipment-first campus triage: one interesting building is enough.
+        triage_items=[(x["result"].get("triage","LOW"),x) for x in physical]
+        best_triage,best_triage_row=max(triage_items,key=lambda t:TRIAGE_RANK.get(t[0],0))
+        campus_triage=best_triage
+        triage_reasons=list(best_triage_row["result"].get("triage_reasons",[]))
+
+        # Campus overview may catch detached yards/towers between buildings, but
+        # a single overview image may only rescue LOW to REVIEW, never create HIGH.
+        overview=next((x for x in results if x.get("building")==0),None)
+        if campus_triage=="LOW" and overview and overview["result"].get("triage") in ("REVIEW","HIGH"):
+            campus_triage="REVIEW"
+            triage_reasons=["campus overview shows a high-value anomaly"] + overview["result"].get("triage_reasons",[])
+
+        final["triage"]=campus_triage
+        final["triage_reasons"]=triage_reasons
+        final["equipment_breakdown"]=aggregate_equipment(results)
     return final,results,use,errors,imgs
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.10 — Low-Value Suppression");r.geometry("1600x880")
+        self.r=r;self.rows=[];r.title("HVAC Territory Discovery v0.9.11 — Sales Triage + Equipment Breakdown");r.geometry("1700x900")
         t=ttk.Frame(r,padding=10);t.pack(fill="x")
         ttk.Label(t,text="Virginia Beach test center:").grid(row=0,column=0)
         self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)
@@ -623,9 +756,10 @@ class App:
         ttk.Entry(t,textvariable=self.key,width=22,show="*").grid(row=0,column=8,padx=4)
         self.st=tk.StringVar(value="Non-vision prescreen first. Deep Vision only on shortlisted candidates.")
         ttk.Label(r,textvariable=self.st).pack(fill="x",padx=10)
-        cs=("rank","facility","address","largest","avg","bldgs","inspect","miles","land","tier","pre","reason","gis","deep","dvscore","source")
+        cs=("rank","facility","address","largest","bldgs","inspect","miles","land","pre","gis",
+            "triage","chiller","tower","large","pipe","yard","dvscore","source")
         self.tree=ttk.Treeview(r,columns=cs,show="headings")
-        widths=(45,210,190,80,75,50,55,55,160,65,55,120,50,65,60,90)
+        widths=(40,170,155,70,45,50,50,120,40,45,70,105,105,105,105,95,50,85)
         for c,w in zip(cs,widths):
             self.tree.heading(c,text=c.upper());self.tree.column(c,width=w,anchor="w")
         self.tree.pack(fill="both",expand=True,padx=10,pady=8)
@@ -635,6 +769,7 @@ class App:
         ttk.Button(f,text="Deep Analyze Selected",command=self.deep_selected).pack(side="left",padx=8)
         ttk.Button(f,text="Deep Analyze Top 10",command=lambda:self.deep_batch(10)).pack(side="left",padx=8)
         ttk.Button(f,text="Deep Analyze Top 25",command=lambda:self.deep_batch(25)).pack(side="left",padx=8)
+        ttk.Button(f,text="Equipment Details",command=self.equipment_details).pack(side="left",padx=8)
         ttk.Button(f,text="Copy Address",command=self.copy).pack(side="left",padx=8)
 
     def start(self):
@@ -648,8 +783,20 @@ class App:
         except Exception as e:self.r.after(0,lambda e=e:self.fail(e))
     def rowvals(self,n,z):
         fmt=lambda v:f"{v:,}" if v is not None else "UNKNOWN"
-        return (n,z.get("facility","") or "",z["address"],fmt(z["largest"]),fmt(z["avg"]),z["count"],len(meaningful_buildings(z)),z["distance"],z["land"],z["tier"],
-                "YES" if z["pre"] else "NO",z["pre_reason"],z["score"],z.get("deep_class",""),z.get("deep_score",""),z["source"])
+        bd=z.get("equipment_breakdown") or {}
+        blank={"status":"not_observed","confidence":0,"views":0}
+        return (
+            n,z.get("facility","") or "",z["address"],fmt(z["largest"]),z["count"],len(meaningful_buildings(z)),
+            z["distance"],z["land"],"YES" if z["pre"] else "NO",z["score"],
+            z.get("triage",""),
+            sig_compact(bd.get("air_cooled_chiller",blank)) if bd else "",
+            sig_compact(bd.get("cooling_tower",blank)) if bd else "",
+            sig_compact(bd.get("large_packaged_hvac",blank)) if bd else "",
+            sig_compact(bd.get("piping",blank)) if bd else "",
+            sig_compact(bd.get("mechanical_yard",blank)) if bd else "",
+            z.get("deep_score",""),z["source"]
+        )
+
     def show(self):
         for i in self.tree.get_children():self.tree.delete(i)
         for n,z in enumerate(self.rows,1):self.tree.insert("","end",iid=str(n-1),values=self.rowvals(n,z))
@@ -692,6 +839,9 @@ class App:
             prefix=f"[{batchpos}/{total}] " if batchpos else "";self.r.after(0,lambda:self.st.set(prefix+x+" — "+(z.get("facility") or z["address"] or "candidate")))
         result,buildings,use,errs,imgs=deep_run_campus(k,z,root,prog)
         z["deep_class"]=result["class"];z["deep_score"]=result["score"];z["deep_conf"]=result["confidence"];z["deep_summary"]=result["summary"];z["deep_result"]=result;z["building_results"]=buildings;z["tokens"]=sum(use);z["deep_errors"]=errs;z["best_building"]=result["best_building"]
+        z["triage"]=result.get("triage","LOW")
+        z["triage_reasons"]=result.get("triage_reasons",[])
+        z["equipment_breakdown"]=result.get("equipment_breakdown") or aggregate_equipment(buildings)
         parts=[]
         for br in buildings:
             if br.get("building",0)>0:
@@ -702,8 +852,9 @@ class App:
                 parts.append(f'B{br["building"]}: {rr.get("class","?")} {rr.get("score","?")}{extra}')
         z["building_score_trace"]=" | ".join(parts)
     def refresh(self):
-        self.rows.sort(key=lambda z:(0 if z.get("deep_class")=="GOOD" else 1 if z.get("deep_class")=="MAYBE" else 2 if z.get("deep_class")=="POOR" else 3,
-                                     -z.get("deep_score",0),0 if z["pre"] else 1,-z["score"],-(z["largest"] or 0)))
+        self.rows.sort(key=lambda z:(
+            0 if z.get("triage")=="HIGH" else 1 if z.get("triage")=="REVIEW" else 2 if z.get("triage")=="LOW" else 3,
+            -z.get("deep_score",0),0 if z["pre"] else 1,-z["score"],-(z["largest"] or 0)))
         for x in self.tree.get_children():self.tree.delete(x)
         for n,z in enumerate(self.rows,1):self.tree.insert("","end",iid=str(n-1),values=self.rowvals(n,z))
     def deep_selected(self):
@@ -714,7 +865,9 @@ class App:
             try:
                 self.run_deep_one(i,k);z=self.rows[i]
                 self.r.after(0,self.refresh)
-                self.r.after(0,lambda:self.st.set(f'{z["address"]}: {z["deep_class"]} {z["deep_score"]}/100 — {z.get("building_score_trace","")} — {z["deep_summary"]} | {z["tokens"]:,} tokens'))
+                self.r.after(0,lambda:self.st.set(
+                    f'{z["address"]}: TRIAGE {z.get("triage","")} — {z.get("building_score_trace","")} — '
+                    f'DV score {z["deep_score"]}/100 — {z["deep_summary"]} | {z["tokens"]:,} tokens'))
             except Exception as e:self.r.after(0,lambda e=e:self.st.set("Deep Vision failed: "+repr(e)))
         threading.Thread(target=w,daemon=True).start()
     def deep_batch(self,n):
@@ -731,10 +884,69 @@ class App:
                     msg=f"{self.rows[i]['address']}: {type(e).__name__}: {e}";self.rows[i]["deep_error"]=msg;errors.append(msg)
             self.r.after(0,self.refresh)
             if errors:
-                log=Path.home()/"Downloads"/"HVAC_v091_batch_errors.txt";log.write_text("\n".join(errors))
+                log=Path.home()/"Downloads"/"HVAC_v0911_batch_errors.txt";log.write_text("\n".join(errors))
                 self.r.after(0,lambda:self.st.set(f"Campus Deep Vision complete: {len(ids)-len(errors)} analyzed, {len(errors)} errors. Log: {log}"))
             else:self.r.after(0,lambda:self.st.set(f"Campus Deep Vision complete: {len(ids)} analyzed, 0 errors."))
         threading.Thread(target=w,daemon=True).start()
+    def equipment_details(self):
+        i=self.selidx()
+        if i is None:return
+        z=self.rows[i]
+        if not z.get("building_results"):
+            messagebox.showinfo("Equipment Details","Run Deep Analyze Selected first.")
+            return
+
+        win=tk.Toplevel(self.r)
+        win.title(f'Equipment Details — {z.get("facility") or z["address"]}')
+        win.geometry("1050x760")
+        txt=tk.Text(win,wrap="word",font=("Consolas",10))
+        sb=ttk.Scrollbar(win,orient="vertical",command=txt.yview)
+        txt.configure(yscrollcommand=sb.set)
+        sb.pack(side="right",fill="y");txt.pack(fill="both",expand=True,padx=8,pady=8)
+
+        txt.insert("end",f'{z.get("facility") or ""}\n{z["address"]}\n')
+        txt.insert("end",f'SALES TRIAGE: {z.get("triage","")}\n')
+        txt.insert("end","TRIAGE REASONS: "+"; ".join(z.get("triage_reasons",[]))+"\n")
+        txt.insert("end",f'Diagnostic DV score: {z.get("deep_score","")}/100\n\n')
+
+        order=[
+            ("air_cooled_chiller","AIR-COOLED / PROCESS CHILLER"),
+            ("cooling_tower","COOLING TOWER / HEAT REJECTION"),
+            ("large_packaged_hvac","LARGE PACKAGED HVAC"),
+            ("small_packaged_hvac","SMALL PACKAGED HVAC"),
+            ("condensers","CONDENSERS / SPLITS"),
+            ("piping","HYDRONIC / PROCESS PIPING"),
+            ("mechanical_yard","MECHANICAL YARD"),
+        ]
+
+        for br in z["building_results"]:
+            bnum=br.get("building",0)
+            rr=br.get("result") or {}
+            if bnum==0:
+                txt.insert("end","="*86+"\nCAMPUS OVERVIEW CONTEXT\n")
+            else:
+                txt.insert("end","="*86+f'\nBUILDING {bnum} — {int(br.get("sqft") or 0):,} ft²\n')
+            txt.insert("end",f'Triage: {rr.get("triage","context")}   ')
+            if bnum>0:
+                txt.insert("end",f'DV: {rr.get("class","")} {rr.get("score","")}/100')
+            txt.insert("end","\n")
+            if rr.get("triage_reasons"):
+                txt.insert("end","Why: "+"; ".join(rr["triage_reasons"])+"\n")
+
+            bd=rr.get("equipment_breakdown") or {}
+            for key,label in order:
+                sig=bd.get(key)
+                if not sig:continue
+                txt.insert("end",f'\n{label}: {sig_compact(sig)}\n')
+                ev=(sig.get("evidence") or "").strip()
+                if ev:txt.insert("end",f'  Evidence: {ev}\n')
+                if sig.get("best_view"):txt.insert("end",f'  Best view: {sig["best_view"]}\n')
+
+            if rr.get("summary"):
+                txt.insert("end","\nModel synthesis: "+rr["summary"]+"\n")
+            txt.insert("end","\n")
+        txt.configure(state="disabled")
+
     def copy(self):
         i=self.selidx()
         if i is not None:
