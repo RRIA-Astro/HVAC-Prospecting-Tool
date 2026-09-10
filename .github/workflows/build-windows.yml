@@ -3,37 +3,72 @@ on:
   workflow_dispatch:
   push:
     branches: [ "main" ]
+
 jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 60
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - run: python -m pip install --upgrade pip
+
       - name: Install CPU PyTorch
         run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
       - run: pip install -r requirements.txt
+
+      - name: Verify source model assets
+        shell: powershell
+        run: |
+          $required = @(
+            "models\candidate.pt",
+            "models\resnet18_embedder_state_fp16.pt",
+            "models\verifier_runtime.json"
+          )
+          foreach ($p in $required) {
+            if (-not (Test-Path $p)) { throw "Missing required model asset before build: $p" }
+            $item = Get-Item $p
+            Write-Host "$p : $($item.Length) bytes"
+          }
+
       - name: Build portable Windows app
         shell: cmd
         run: >
           pyinstaller --noconfirm --clean --onedir --windowed
-          --name HVAC_Territory_Discovery_v0110
+          --name HVAC_Territory_Discovery_v0111
           --add-data "models;models"
           --collect-all ultralytics
           --collect-submodules torchvision
           app.py
+
+      - name: Verify bundled model assets
+        shell: powershell
+        run: |
+          $root = "dist\HVAC_Territory_Discovery_v0111"
+          $names = @("candidate.pt","resnet18_embedder_state_fp16.pt","verifier_runtime.json")
+          foreach ($name in $names) {
+            $match = Get-ChildItem $root -Recurse -File -Filter $name | Select-Object -First 1
+            if (-not $match) { throw "PyInstaller output is missing model asset: $name" }
+            Write-Host "$name bundled at $($match.FullName) : $($match.Length) bytes"
+          }
+
       - name: Add documentation
         shell: powershell
         run: |
-          Copy-Item README.txt dist\HVAC_Territory_Discovery_v0110\
-          Copy-Item MODEL_CARD.txt dist\HVAC_Territory_Discovery_v0110\
+          Copy-Item README.txt dist\HVAC_Territory_Discovery_v0111\
+          Copy-Item MODEL_CARD.txt dist\HVAC_Territory_Discovery_v0111\
+
       - name: Zip portable app
         shell: powershell
-        run: Compress-Archive -Path dist\HVAC_Territory_Discovery_v0110\* -DestinationPath HVAC_Territory_Discovery_v0110_Windows.zip -Force
+        run: Compress-Archive -Path dist\HVAC_Territory_Discovery_v0111\* -DestinationPath HVAC_Territory_Discovery_v0111_Windows.zip -Force
+
       - uses: actions/upload-artifact@v4
         with:
-          name: HVAC-Territory-Discovery-v0110-Windows
-          path: HVAC_Territory_Discovery_v0110_Windows.zip
+          name: HVAC-Territory-Discovery-v0111-Windows
+          path: HVAC_Territory_Discovery_v0111_Windows.zip
