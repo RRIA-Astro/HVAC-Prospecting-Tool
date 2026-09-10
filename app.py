@@ -1,4 +1,4 @@
-import base64,json,math,threading,tkinter as tk,urllib.parse,urllib.request,tempfile,time,shutil
+import base64,json,math,threading,tkinter as tk,urllib.parse,urllib.request,tempfile,time,shutil,sys,os,subprocess,csv
 from tkinter import ttk,messagebox
 from pathlib import Path
 
@@ -11,7 +11,7 @@ AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/Ima
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.10.0"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.11.0"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -253,540 +253,270 @@ def campus_images(z,root):
         paths.append((f"BUILDING {i} — {int(b.get('sq',0)):,} ft2",str(q),b))
     return paths
 
-# ---------------- Human Review + Training Dataset ----------------
-import csv,os,zipfile
-from datetime import datetime,timezone
-from PIL import Image,ImageTk
 
-APP_VERSION="0.10.1"
-DATASET_NAME="HVAC_Training_Dataset"
-EQUIPMENT_CLASSES=[
-    ("cooling_tower","Cooling tower / fluid cooler / evaporative heat rejection"),
-    ("air_cooled_chiller","Air-cooled / process chiller"),
-    ("large_packaged_hvac","Genuinely large packaged RTU / AHU"),
-    ("process_hydronic_piping","Substantial hydronic / process piping"),
-    ("mechanical_yard_process","Mechanical yard / process-cooling area"),
-    ("other_high_value_mechanical","Other clearly high-value mechanical equipment"),
-]
-CLASS_IDS={k:i for i,(k,_) in enumerate(EQUIPMENT_CLASSES)}
+from datetime import datetime
+from PIL import Image,ImageTk,ImageDraw
+import numpy as np
 
-
-def dataset_root():
-    p=Path.home()/"Downloads"/DATASET_NAME
-    (p/"images").mkdir(parents=True,exist_ok=True)
-    (p/"labels").mkdir(parents=True,exist_ok=True)
-    return p
-
+APP_VERSION='0.11.0'
+CANDIDATE_THRESHOLD=0.07
+TOWER_CHILLER_THRESHOLD=0.35
+LARGE_PACKAGED_THRESHOLD=0.45
+DISPLAY={'COOLING_TOWER':'Tower','AIR_COOLED_CHILLER':'Chiller','LARGE_PACKAGED_HVAC':'Large pkg'}
 
 def safe_name(s):
-    s="".join(c if c.isalnum() or c in "-_" else "_" for c in (s or "candidate"))
-    while "__" in s:s=s.replace("__","_")
-    return s.strip("_") or "candidate"
+    s=''.join(c if c.isalnum() or c in '-_' else '_' for c in (s or 'candidate'))
+    while '__' in s:s=s.replace('__','_')
+    return s.strip('_') or 'candidate'
 
+def resource_path(*parts):
+    return Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent)).joinpath(*parts)
 
-def site_key(z):
-    return z.get("gpin") or (z.get("address") or f'{z.get("lon",0):.6f}_{z.get("lat",0):.6f}')
+def box_iou(a,b):
+    x1=max(a[0],b[0]);y1=max(a[1],b[1]);x2=min(a[2],b[2]);y2=min(a[3],b[3])
+    inter=max(0,x2-x1)*max(0,y2-y1)
+    if inter<=0:return 0.0
+    aa=max(0,a[2]-a[0])*max(0,a[3]-a[1]);bb=max(0,b[2]-b[0])*max(0,b[3]-b[1])
+    return inter/max(aa+bb-inter,1e-9)
 
+def square_crop(box,w,h,scale=1.8,min_side=96,max_side=1024):
+    x1,y1,x2,y2=box;cx=(x1+x2)/2;cy=(y1+y2)/2
+    side=max(x2-x1,y2-y1)*scale;side=max(side,min_side);side=min(side,max_side,w,h)
+    a=cx-side/2;b=cy-side/2;c=cx+side/2;d=cy+side/2
+    if a<0:c-=a;a=0
+    if b<0:d-=b;b=0
+    if c>w:a-=c-w;c=w
+    if d>h:b-=d-h;d=h
+    return int(max(0,a)),int(max(0,b)),int(min(w,c)),int(min(h,d))
 
-def labels_json_path():return dataset_root()/"annotations.json"
+def softmax(x):
+    x=x-np.max(x);e=np.exp(x);return e/np.sum(e)
 
+class LocalCV:
+    def __init__(self,progress=None):
+        if progress:progress('Loading frozen v0.0.12 local models...')
+        os.environ.setdefault('YOLO_CONFIG_DIR',str(Path.home()/'.hvac_territory_ultralytics'))
+        import torch
+        import torch.nn as nn
+        from torchvision import transforms
+        from torchvision.models import resnet18
+        from ultralytics import YOLO
+        self.torch=torch
+        try:torch.set_num_threads(max(1,min(8,(os.cpu_count() or 4)-1)))
+        except:pass
+        self.candidate=YOLO(str(resource_path('models','candidate.pt')))
+        self.embedder=resnet18(weights=None);self.embedder.fc=nn.Identity()
+        self.embedder.load_state_dict(torch.load(resource_path('models','resnet18_embedder_state.pt'),map_location='cpu'))
+        self.embedder.eval()
+        self.tf=transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor(),transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])])
+        v=json.loads(resource_path('models','verifier_runtime.json').read_text())
+        self.mean=np.asarray(v['scaler_mean'],dtype=np.float32);self.scale=np.asarray(v['scaler_scale'],dtype=np.float32)
+        self.coef=np.asarray(v['coef'],dtype=np.float32);self.intercept=np.asarray(v['intercept'],dtype=np.float32)
+        self.idname={int(k):v for k,v in v['class_names_by_id'].items()}
+        if progress:progress('Local CV ready.')
 
-def load_dataset_labels():
-    p=labels_json_path()
-    if not p.exists():return {"version":2,"classes":[k for k,_ in EQUIPMENT_CLASSES],"sites":{}}
-    try:
-        d=json.loads(p.read_text())
-        d.setdefault("version",2);d.setdefault("classes",[k for k,_ in EQUIPMENT_CLASSES]);d.setdefault("sites",{})
-        # Migration happens after helper definitions are loaded, in App.__init__.
-        return d
-    except Exception:
-        return {"version":2,"classes":[k for k,_ in EQUIPMENT_CLASSES],"sites":{}}
+    def positions(self,n):
+        return [0] if n<=1024 else [0,n-1024]
 
+    def verify(self,tile,pb,conf,source_name):
+        crop=tile.crop(square_crop(pb,tile.width,tile.height)).convert('RGB')
+        x=self.tf(crop).unsqueeze(0)
+        with self.torch.no_grad():f=self.embedder(x).cpu().numpy()
+        f=f/np.maximum(np.linalg.norm(f,axis=1,keepdims=True),1e-9)
+        x1,y1,x2,y2=pb;T=1024.0;bw=max(x2-x1,1);bh=max(y2-y1,1);wf=bw/T;hf=bh/T;area=wf*hf
+        num=np.array([[float(conf),wf,hf,area,math.log(max(wf,1e-6)/max(hf,1e-6)),(x1+x2)/2/T,(y1+y2)/2/T,
+                       max(0,min(x1,y1,T-x2,T-y2))/T,1.0 if 'CAMPUS_OVERVIEW' in source_name.upper() else 0.0]],dtype=np.float32)
+        for col in (1,2,3):num[:,col]=np.log(np.maximum(num[:,col],1e-6))
+        feat=np.concatenate([f,num],axis=1)[0];xs=(feat-self.mean)/self.scale
+        probs=softmax(xs@self.coef.T+self.intercept);target=probs[1:];pid=int(np.argmax(target))+1;p=float(np.sum(target))
+        thr=LARGE_PACKAGED_THRESHOLD if pid==3 else TOWER_CHILLER_THRESHOLD
+        return self.idname[pid],p,float(probs[0]),p>=thr
 
-def save_dataset_labels(d):
-    root=dataset_root();p=root/"annotations.json";tmp=root/"annotations.tmp.json"
-    d["version"]=2
-    for s in d.get("sites",{}).values():
-        for rec in s.get("images",[]):sync_training_label(rec)
-    tmp.write_text(json.dumps(d,indent=2));tmp.replace(p)
-    write_site_csv(d)
-    (root/"classes.txt").write_text("\n".join(k for k,_ in EQUIPMENT_CLASSES)+"\n")
+    def scan_image(self,path,tile_dir):
+        im=Image.open(path).convert('RGB');w,h=im.size;dets=[];props=0
+        for x0 in self.positions(w):
+            for y0 in self.positions(h):
+                tw=min(1024,w-x0);th=min(1024,h-y0);tile=im.crop((x0,y0,x0+tw,y0+th)).convert('RGB')
+                tp=Path(tile_dir)/f'{Path(path).stem}__x{x0}_y{y0}.jpg';tile.save(tp,quality=92)
+                r=self.candidate.predict(source=str(tp),imgsz=1024,conf=CANDIDATE_THRESHOLD,iou=.50,verbose=False,device='cpu')[0]
+                if r.boxes is None:continue
+                xy=r.boxes.xyxy.detach().cpu().numpy();cf=r.boxes.conf.detach().cpu().numpy();props+=len(xy)
+                for bb,cc in zip(xy,cf):
+                    pb=tuple(map(float,bb.tolist()));typ,p,rej,keep=self.verify(tile,pb,float(cc),Path(path).name)
+                    if keep:dets.append({'box':(pb[0]+x0,pb[1]+y0,pb[2]+x0,pb[3]+y0),'type':typ,'p':p,'candidate':float(cc),'reject':rej})
+        dets.sort(key=lambda d:(d['p'],d['candidate']),reverse=True);keep=[]
+        for d in dets:
+            if any(box_iou(d['box'],k['box'])>=.45 for k in keep):continue
+            keep.append(d)
+        return im,keep,props
 
+    def scan_property(self,views,site_dir,progress=None):
+        site_dir=Path(site_dir);ann=site_dir/'annotated';tiles=site_dir/'_tiles';ann.mkdir(parents=True,exist_ok=True);tiles.mkdir(parents=True,exist_ok=True)
+        all_d=[];props=0;viewrows=[]
+        try:
+            for i,(label,path,b) in enumerate(views,1):
+                if progress:progress(f'{label} ({i}/{len(views)})')
+                im,dets,np_=self.scan_image(path,tiles);props+=np_
+                for d in dets:d['view']=label;d['image']=Path(path).name
+                all_d.extend(dets);viewrows.append({'view':label,'image':Path(path).name,'stage1_proposals':np_,'retained':len(dets)})
+                if dets:
+                    dr=ImageDraw.Draw(im)
+                    for d in dets:
+                        x1,y1,x2,y2=d['box'];txt=f"{DISPLAY.get(d['type'],d['type'])} {d['p']:.2f}"
+                        dr.rectangle((x1,y1,x2,y2),outline='red',width=5);dr.rectangle((x1,max(0,y1-24),x1+max(120,len(txt)*8),y1),fill='red');dr.text((x1+3,max(0,y1-21)),txt,fill='white')
+                    im.save(ann/Path(path).name,quality=93)
+            hits={k:0 for k in DISPLAY};maxp=0.0
+            for d in all_d:
+                if d['type'] in hits:hits[d['type']]+=1
+                maxp=max(maxp,d['p'])
+            out={'status':'SURFACE' if all_d else 'QUIET','hits':hits,'max_prob':maxp,'stage1_proposals':props,'retained_evidence':len(all_d),'views':viewrows,'detections':all_d}
+            (site_dir/'cv_result.json').write_text(json.dumps(out,indent=2,default=float))
+            return out
+        finally:shutil.rmtree(tiles,ignore_errors=True)
 
-def write_site_csv(d):
-    p=dataset_root()/"site_labels.csv"
-    with p.open("w",newline="",encoding="utf-8") as f:
-        w=csv.writer(f)
-        w.writerow(["site_key","facility","address","rating","land_use","zoning","largest_ft2","building_count","notes","updated_utc"])
-        for k,s in d.get("sites",{}).items():
-            meta=s.get("meta",{})
-            w.writerow([k,meta.get("facility",""),meta.get("address",""),s.get("rating","UNRATED"),
-                        meta.get("land",""),meta.get("zone",""),meta.get("largest",""),meta.get("count",""),
-                        s.get("notes",""),s.get("updated_utc","")])
+def hit_text(cv):
+    h=cv['hits'];q=[]
+    if h['COOLING_TOWER']:q.append(f"Tower {h['COOLING_TOWER']}")
+    if h['AIR_COOLED_CHILLER']:q.append(f"Chiller {h['AIR_COOLED_CHILLER']}")
+    if h['LARGE_PACKAGED_HVAC']:q.append(f"Large pkg {h['LARGE_PACKAGED_HVAC']}")
+    return ' | '.join(q)
 
+def opportunity_score(z,cv):
+    h=cv['hits'];t=h['COOLING_TOWER'];c=h['AIR_COOLED_CHILLER'];p=h['LARGE_PACKAGED_HVAC']
+    if t:base=94
+    elif c:base=91
+    elif p>=3:base=84
+    elif p:base=76
+    else:return 0
+    if sum(x>0 for x in (t,c,p))>=2:base+=3
+    base+=min(2,int(round(cv['max_prob']*2)));base+=min(2,int((z.get('score') or 0)/45))
+    return min(99,int(base))
 
-def image_review_state(rec):
-    """Return normalized review state and conservatively migrate v0.10.0 records."""
-    st=(rec.get("review_state") or "").upper()
-    if st in ("POSITIVE","NEGATIVE","UNREVIEWED"):
-        return st
-    # Conservative migration: only explicit boxes or explicit v0.10.0 negative
-    # count as reviewed. Ratings alone are NOT enough for detector training.
-    if rec.get("annotations"):
-        return "POSITIVE"
-    if rec.get("negative"):
-        return "NEGATIVE"
-    return "UNREVIEWED"
-
-
-def normalize_review_record(rec):
-    st=image_review_state(rec)
-    rec["review_state"]=st
-    rec["negative"]=(st=="NEGATIVE")  # backward compatibility
-    return rec
-
-
-def yolo_lines(image_record):
-    w=float(image_record.get("width") or 1);h=float(image_record.get("height") or 1)
-    lines=[]
-    for a in image_record.get("annotations",[]):
-        if a.get("class") not in CLASS_IDS:continue
-        x1,y1,x2,y2=[float(a.get(k,0)) for k in ("x1","y1","x2","y2")]
-        x1,x2=sorted((max(0,min(w,x1)),max(0,min(w,x2))));y1,y2=sorted((max(0,min(h,y1)),max(0,min(h,y2))))
-        if x2-x1<2 or y2-y1<2:continue
-        xc=(x1+x2)/(2*w);yc=(y1+y2)/(2*h);bw=(x2-x1)/w;bh=(y2-y1)/h
-        lines.append(f"{CLASS_IDS[a['class']]} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
-    return lines
-
-
-def sync_training_label(image_record):
-    """Keep working labels safe: unreviewed images have NO YOLO label file."""
-    root=dataset_root();img_name=image_record.get("dataset_image")
-    if not img_name:return
-    normalize_review_record(image_record)
-    lp=root/"labels"/(Path(img_name).stem+".txt")
-    st=image_record["review_state"]
-    if st=="UNREVIEWED":
-        # Remove stale v0.10.0 empty label files so unreviewed images cannot
-        # accidentally become training negatives.
-        if lp.exists():lp.unlink()
-        return
-    if st=="POSITIVE":
-        lines=yolo_lines(image_record)
-        # A reviewed positive must contain at least one valid target box.
-        if not lines:
-            if lp.exists():lp.unlink()
-            return
-        lp.write_text("\n".join(lines)+"\n")
-        return
-    # Reviewed negative: explicit empty label file is correct YOLO negative.
-    lp.write_text("")
-
-
-def migrate_review_states(d):
-    changed=False
-    for s in d.get("sites",{}).values():
-        for rec in s.get("images",[]):
-            old=rec.get("review_state")
-            normalize_review_record(rec)
-            if old!=rec.get("review_state"):changed=True
-            sync_training_label(rec)
-    return changed
-
-
-def export_training_safe_zip(d):
-    """Export ONLY explicitly reviewed detector images. Unreviewed images are excluded."""
-    root=dataset_root();stamp=datetime.now().strftime("%Y%m%d_%H%M")
-    out=Path.home()/"Downloads"/f"{DATASET_NAME}_TRAINING_SAFE_{stamp}.zip"
-    safe_root="HVAC_Training_Dataset_SAFE"
-    reviewed_records=[];excluded=0;pos=neg=0;boxes=0
-
-    with zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED) as z:
-        z.writestr(f"{safe_root}/classes.txt","\n".join(k for k,_ in EQUIPMENT_CLASSES)+"\n")
-        z.writestr(f"{safe_root}/dataset.yaml",
-                   "path: .\ntrain: images\nval: images\nnames:\n"+
-                   "".join(f"  {i}: {k}\n" for i,(k,_) in enumerate(EQUIPMENT_CLASSES)))
-
-        for sk,s in d.get("sites",{}).items():
-            meta=s.get("meta",{})
-            for rec in s.get("images",[]):
-                normalize_review_record(rec);st=rec["review_state"]
-                if st=="UNREVIEWED":excluded+=1;continue
-                img_name=rec.get("dataset_image")
-                if not img_name:continue
-                ip=root/"images"/img_name
-                if not ip.exists():continue
-                lines=yolo_lines(rec) if st=="POSITIVE" else []
-                # Safety: positive without a valid box is excluded, not silently negative.
-                if st=="POSITIVE" and not lines:
-                    excluded+=1;continue
-                z.write(ip,f"{safe_root}/images/{img_name}")
-                label_name=Path(img_name).stem+".txt"
-                z.writestr(f"{safe_root}/labels/{label_name}","\n".join(lines)+("\n" if lines else ""))
-                boxes+=len(lines);pos+=1 if st=="POSITIVE" else 0;neg+=1 if st=="NEGATIVE" else 0
-                reviewed_records.append({
-                    "site_key":sk,"facility":meta.get("facility",""),"address":meta.get("address",""),
-                    "site_rating":s.get("rating","UNRATED"),"image":img_name,"label":rec.get("label",""),
-                    "review_state":st,"image_rating":rec.get("rating","UNRATED"),"boxes":len(lines),
-                    "image_notes":rec.get("image_notes","")
-                })
-
-        manifest="site_key,facility,address,site_rating,image,label,review_state,image_rating,boxes,image_notes\n"
-        import io
-        sio=io.StringIO();w=csv.writer(sio)
-        w.writerow(["site_key","facility","address","site_rating","image","label","review_state","image_rating","boxes","image_notes"])
-        for r in reviewed_records:w.writerow([r[k] for k in ("site_key","facility","address","site_rating","image","label","review_state","image_rating","boxes","image_notes")])
-        z.writestr(f"{safe_root}/review_manifest.csv",sio.getvalue())
-        z.writestr(f"{safe_root}/README.txt",
-                   f"Training-safe export created by HVAC Territory Discovery v0.10.1.\n\n"
-                   f"Reviewed positive images: {pos}\nReviewed negative images: {neg}\n"
-                   f"Target boxes: {boxes}\nExcluded/unreviewed images: {excluded}\n\n"
-                   "Only explicitly reviewed images are included. Positive images without at least one valid target box are excluded.\n"
-                   "Negative images contain explicit empty YOLO label files.\n"
-                   "Unreviewed images are intentionally absent and must never be treated as negatives.\n")
-    return out,{"positive":pos,"negative":neg,"boxes":boxes,"excluded":excluded,"reviewed":pos+neg}
-
-
-def export_full_backup_zip():
-    root=dataset_root();stamp=datetime.now().strftime("%Y%m%d_%H%M")
-    out=Path.home()/"Downloads"/f"{DATASET_NAME}_FULL_BACKUP_{stamp}.zip"
-    with zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED) as z:
-        for p in root.rglob("*"):
-            if p.is_file():z.write(p,p.relative_to(root.parent))
-    return out
-
-
-class ReviewWindow:
-    def __init__(self,app,z,raw_imgs):
-        self.app=app;self.z=z;self.root=dataset_root();self.data=app.label_data;self.key=site_key(z)
-        self.site=self.data["sites"].setdefault(self.key,{"rating":"UNRATED","notes":"","meta":{},"images":[]})
-        self.site["meta"]={"facility":z.get("facility","") or "","address":z.get("address","") or "","gpin":z.get("gpin","") or "",
-                           "land":z.get("land","") or "","zone":z.get("zone","") or "","largest":z.get("largest"),"count":z.get("count",0),
-                           "lon":z.get("lon"),"lat":z.get("lat"),"source":z.get("source","")}
-        self.images=self.prepare_images(raw_imgs);self.idx=0;self.current_pil=None;self.tkimg=None;self.scale=1;self.offset=(0,0);self.drag_start=None;self.temp_rect=None
-        self.win=tk.Toplevel(app.r);self.win.title(f"Review & Label — {z.get('facility') or z.get('address')}");self.win.geometry("1500x900")
-        self.win.protocol("WM_DELETE_WINDOW",self.close)
-        self.build_ui();self.load_image()
-
-    def prepare_images(self,imgs):
-        safe=safe_name((self.z.get("facility") or "")+"_"+(self.z.get("address") or ""))
-        existing={x.get("label"):x for x in self.site.get("images",[])}
-        out=[]
-        for label,p,b in imgs:
-            im=Image.open(p);w,h=im.size
-            dataset_name=f"{safe}_{safe_name(label)}.jpg"
-            dst=self.root/"images"/dataset_name
-            if not dst.exists():shutil.copy2(p,dst)
-            rec=existing.get(label,{"label":label,"annotations":[],"negative":False,"image_notes":"","rating":"UNRATED","review_state":"UNREVIEWED"})
-            normalize_review_record(rec)
-            rec.update({"dataset_image":dataset_name,"width":w,"height":h,"building_sqft":b.get("sq") if b else None,
-                        "building_lon":b.get("lon") if b else None,"building_lat":b.get("lat") if b else None})
-            out.append(rec)
-        self.site["images"]=out
-        return out
-
-    def build_ui(self):
-        top=ttk.Frame(self.win,padding=8);top.pack(fill="x")
-        ttk.Label(top,text=f"{self.z.get('facility') or ''}   {self.z.get('address') or ''}",font=("Segoe UI",11,"bold")).pack(side="left")
-        self.imgtitle=tk.StringVar();ttk.Label(top,textvariable=self.imgtitle).pack(side="left",padx=20)
-        ttk.Button(top,text="Save",command=self.save).pack(side="right",padx=4)
-        ttk.Button(top,text="Save & Close",command=self.close).pack(side="right",padx=4)
-
-        body=ttk.Frame(self.win);body.pack(fill="both",expand=True,padx=8,pady=4)
-        left=ttk.Frame(body);left.pack(side="left",fill="both",expand=True)
-        right=ttk.Frame(body,width=360,padding=8);right.pack(side="right",fill="y")
-
-        self.canvas=tk.Canvas(left,bg="#202020",cursor="crosshair",highlightthickness=0)
-        self.canvas.pack(fill="both",expand=True)
-        self.canvas.bind("<ButtonPress-1>",self.on_press);self.canvas.bind("<B1-Motion>",self.on_drag);self.canvas.bind("<ButtonRelease-1>",self.on_release)
-        self.canvas.bind("<Configure>",lambda e:self.render())
-
-        nav=ttk.Frame(left,padding=6);nav.pack(fill="x")
-        ttk.Button(nav,text="◀ Previous",command=self.prev).pack(side="left")
-        ttk.Button(nav,text="Next ▶",command=self.next).pack(side="left",padx=8)
-        ttk.Label(nav,text="Drag a box around equipment. Boxes are saved in original-image coordinates.").pack(side="left",padx=15)
-
-        ttk.Label(right,text="SITE RATING",font=("Segoe UI",10,"bold")).pack(anchor="w")
-        self.rating=tk.StringVar(value=self.site.get("rating","UNRATED"))
-        for v in ("GOOD","MAYBE","POOR","UNRATED"):
-            ttk.Radiobutton(right,text=v,value=v,variable=self.rating).pack(anchor="w")
-
-        ttk.Separator(right).pack(fill="x",pady=8)
-        ttk.Label(right,text="BOX CLASS",font=("Segoe UI",10,"bold")).pack(anchor="w")
-        self.class_var=tk.StringVar(value=EQUIPMENT_CLASSES[0][0])
-        self.class_box=ttk.Combobox(right,textvariable=self.class_var,state="readonly",width=36,
-                                    values=[k for k,_ in EQUIPMENT_CLASSES]);self.class_box.pack(fill="x",pady=3)
-        self.class_desc=tk.StringVar();ttk.Label(right,textvariable=self.class_desc,wraplength=330).pack(anchor="w")
-        self.class_box.bind("<<ComboboxSelected>>",lambda e:self.update_class_desc());self.update_class_desc()
-
-        ttk.Separator(right).pack(fill="x",pady=8)
-        ttk.Label(right,text="TRAINING REVIEW STATE",font=("Segoe UI",10,"bold")).pack(anchor="w")
-        self.review_state=tk.StringVar(value="UNREVIEWED")
-        rs=ttk.Frame(right);rs.pack(fill="x",pady=3)
-        ttk.Radiobutton(rs,text="Positive",value="POSITIVE",variable=self.review_state,command=self.review_state_changed).pack(side="left")
-        ttk.Radiobutton(rs,text="Negative",value="NEGATIVE",variable=self.review_state,command=self.review_state_changed).pack(side="left",padx=8)
-        ttk.Radiobutton(rs,text="Unreviewed",value="UNREVIEWED",variable=self.review_state,command=self.review_state_changed).pack(side="left")
-        ttk.Label(right,text="Positive = all visible target equipment is boxed. Negative = reviewed and no target equipment is present. Unreviewed images are EXCLUDED from training.",wraplength=330).pack(anchor="w")
-        self.progress_var=tk.StringVar();ttk.Label(right,textvariable=self.progress_var,font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(6,0))
-
-        ttk.Label(right,text="IMAGE / BUILDING RATING",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(10,2))
-        self.image_rating=tk.StringVar(value="UNRATED")
-        br=ttk.Frame(right);br.pack(fill="x")
-        for v in ("GOOD","MAYBE","POOR","UNRATED"):
-            ttk.Radiobutton(br,text=v,value=v,variable=self.image_rating).pack(side="left")
-
-        ttk.Label(right,text="ANNOTATIONS",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(10,2))
-        self.listbox=tk.Listbox(right,height=12);self.listbox.pack(fill="x")
-        b=ttk.Frame(right);b.pack(fill="x",pady=4)
-        ttk.Button(b,text="Delete Selected",command=self.delete_box).pack(side="left")
-        ttk.Button(b,text="Clear Image",command=self.clear_boxes).pack(side="left",padx=4)
-
-        ttk.Label(right,text="SITE NOTES",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(10,2))
-        self.notes=tk.Text(right,width=38,height=7,wrap="word");self.notes.pack(fill="x");self.notes.insert("1.0",self.site.get("notes","") or "")
-        ttk.Label(right,text="IMAGE NOTES",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(10,2))
-        self.image_notes=tk.Text(right,width=38,height=5,wrap="word");self.image_notes.pack(fill="x")
-
-    def update_class_desc(self):
-        d=dict(EQUIPMENT_CLASSES);self.class_desc.set(d.get(self.class_var.get(),""))
-
-    def persist_current_fields(self):
-        if not self.images:return
-        rec=self.images[self.idx]
-        rec["review_state"]=self.review_state.get();rec["negative"]=(rec["review_state"]=="NEGATIVE")
-        rec["image_notes"]=self.image_notes.get("1.0","end").strip();rec["rating"]=self.image_rating.get()
-        self.site["rating"]=self.rating.get();self.site["notes"]=self.notes.get("1.0","end").strip();self.site["updated_utc"]=datetime.now(timezone.utc).isoformat()
-
-    def load_image(self):
-        if not self.images:return
-        rec=self.images[self.idx];p=self.root/"images"/rec["dataset_image"]
-        self.current_pil=Image.open(p).convert("RGB")
-        st=image_review_state(rec);rec["review_state"]=st
-        mark={"POSITIVE":"✓ POSITIVE","NEGATIVE":"✓ NEGATIVE","UNREVIEWED":"? UNREVIEWED"}[st]
-        self.imgtitle.set(f"{self.idx+1}/{len(self.images)} — {mark} — {rec['label']} — {rec.get('building_sqft') or 'campus'}")
-        self.review_state.set(st);self.image_rating.set(rec.get("rating","UNRATED"))
-        self.image_notes.delete("1.0","end");self.image_notes.insert("1.0",rec.get("image_notes","") or "")
-        self.refresh_list();self.update_progress();self.render()
-
-    def render(self):
-        if not self.current_pil:return
-        cw=max(100,self.canvas.winfo_width());ch=max(100,self.canvas.winfo_height())
-        iw,ih=self.current_pil.size;self.scale=min(cw/iw,ch/ih);rw,rh=max(1,int(iw*self.scale)),max(1,int(ih*self.scale))
-        ox=(cw-rw)//2;oy=(ch-rh)//2;self.offset=(ox,oy)
-        view=self.current_pil.resize((rw,rh),Image.LANCZOS);self.tkimg=ImageTk.PhotoImage(view)
-        self.canvas.delete("all");self.canvas.create_image(ox,oy,anchor="nw",image=self.tkimg)
-        for n,a in enumerate(self.images[self.idx].get("annotations",[]),1):
-            x1=ox+a["x1"]*self.scale;y1=oy+a["y1"]*self.scale;x2=ox+a["x2"]*self.scale;y2=oy+a["y2"]*self.scale
-            self.canvas.create_rectangle(x1,y1,x2,y2,outline="#ffcc00",width=2)
-            self.canvas.create_text(x1+3,y1+3,anchor="nw",text=f"{n} {a['class']}",fill="#ffcc00",font=("Segoe UI",9,"bold"))
-
-    def canvas_to_image(self,x,y):
-        ox,oy=self.offset
-        if self.scale<=0:return None
-        ix=(x-ox)/self.scale;iy=(y-oy)/self.scale
-        w,h=self.current_pil.size
-        return max(0,min(w,ix)),max(0,min(h,iy))
-
-    def on_press(self,e):
-        if self.review_state.get()=="NEGATIVE":return
-        self.drag_start=(e.x,e.y);self.temp_rect=self.canvas.create_rectangle(e.x,e.y,e.x,e.y,outline="#00ff99",width=2,dash=(4,2))
-    def on_drag(self,e):
-        if self.drag_start and self.temp_rect:self.canvas.coords(self.temp_rect,self.drag_start[0],self.drag_start[1],e.x,e.y)
-    def on_release(self,e):
-        if not self.drag_start:return
-        a=self.canvas_to_image(*self.drag_start);b=self.canvas_to_image(e.x,e.y);self.drag_start=None
-        if self.temp_rect:self.canvas.delete(self.temp_rect);self.temp_rect=None
-        if not a or not b:return
-        x1,x2=sorted((a[0],b[0]));y1,y2=sorted((a[1],b[1]))
-        if x2-x1<8 or y2-y1<8:return
-        self.images[self.idx].setdefault("annotations",[]).append({"class":self.class_var.get(),"x1":round(x1,1),"y1":round(y1,1),"x2":round(x2,1),"y2":round(y2,1)})
-        self.review_state.set("POSITIVE");self.images[self.idx]["review_state"]="POSITIVE";self.images[self.idx]["negative"]=False
-        self.refresh_list();self.update_progress();self.render()
-
-    def refresh_list(self):
-        self.listbox.delete(0,"end")
-        for n,a in enumerate(self.images[self.idx].get("annotations",[]),1):
-            self.listbox.insert("end",f"{n}. {a['class']}  ({int(a['x1'])},{int(a['y1'])})-({int(a['x2'])},{int(a['y2'])})")
-    def delete_box(self):
-        s=self.listbox.curselection()
-        if not s:return
-        del self.images[self.idx]["annotations"][s[0]];self.refresh_list();self.render()
-    def clear_boxes(self):
-        if messagebox.askyesno("Clear annotations","Delete all boxes on this image?",parent=self.win):
-            self.images[self.idx]["annotations"]=[];self.refresh_list();self.render()
-    def review_state_changed(self):
-        if not self.images:return
-        rec=self.images[self.idx];st=self.review_state.get()
-        if st=="NEGATIVE" and rec.get("annotations"):
-            if messagebox.askyesno("Reviewed negative","Marking this image NEGATIVE will delete its target boxes. Continue?",parent=self.win):
-                rec["annotations"]=[];self.refresh_list();self.render()
-            else:
-                self.review_state.set(image_review_state(rec));return
-        if st=="POSITIVE" and not rec.get("annotations"):
-            messagebox.showinfo("Positive needs boxes","Draw boxes around ALL visible target equipment before marking this image Positive. The image will remain Unreviewed until at least one valid target box exists.",parent=self.win)
-            self.review_state.set("UNREVIEWED");st="UNREVIEWED"
-        rec["review_state"]=st;rec["negative"]=(st=="NEGATIVE")
-        self.update_progress()
-
-    def update_progress(self):
-        pos=neg=un=0
-        for rec in self.images:
-            st=image_review_state(rec)
-            if st=="POSITIVE":pos+=1
-            elif st=="NEGATIVE":neg+=1
-            else:un+=1
-        self.progress_var.set(f"Reviewed {pos+neg}/{len(self.images)} | Positive {pos} | Negative {neg} | Unreviewed {un}")
-
-    def prev(self):
-        self.persist_current_fields()
-        if self.idx>0:self.idx-=1;self.load_image()
-    def next(self):
-        self.persist_current_fields()
-        if self.idx<len(self.images)-1:self.idx+=1;self.load_image()
-    def save(self):
-        self.persist_current_fields()
-        # Safety: a positive image without boxes is never considered reviewed.
-        for rec in self.images:
-            if image_review_state(rec)=="POSITIVE" and not yolo_lines(rec):
-                rec["review_state"]="UNREVIEWED";rec["negative"]=False
-            sync_training_label(rec)
-        save_dataset_labels(self.data);self.app.apply_human_labels();self.app.refresh();self.update_progress()
-        self.app.st.set(f"Saved training-safe review state for {self.z.get('facility') or self.z.get('address')} to {dataset_root()}")
-    def close(self):
-        self.save();self.win.destroy()
-
+class DetailWindow:
+    def __init__(self,parent,z):
+        w=tk.Toplevel(parent);w.title(f"Prospect Detail — {z.get('facility') or z.get('address')}");w.geometry('900x650')
+        txt=tk.Text(w,wrap='word',font=('Segoe UI',10));txt.pack(fill='both',expand=True,padx=10,pady=10)
+        lines=[f"FACILITY: {z.get('facility','')}",f"ADDRESS: {z.get('address','')}",f"CV: {z.get('cv_status','NOT SCANNED')}",
+               f"OPPORTUNITY SCORE: {z.get('cv_score','')}",f"MODEL EVIDENCE HITS: {z.get('cv_equipment','')}",
+               f"MAX HIGH-VALUE PROBABILITY: {'' if z.get('cv_max_prob') is None else str(round(100*z['cv_max_prob']))+'%'}",
+               f"GIS TIER / SCORE: {z.get('tier','')} / {z.get('score','')}",f"LAND USE: {z.get('land','')}",
+               f"LARGEST BUILDING: {z.get('largest') or 'UNKNOWN'} ft²",f"BUILDINGS: {z.get('count',0)}",f"DISTANCE: {z.get('distance','')} mi",
+               '',"Model evidence hits are not guaranteed physical unit counts because campus and building views can overlap.",
+               "QUIET does not prove no valuable mechanical opportunity exists."]
+        txt.insert('1.0','\n'.join(lines));txt.config(state='disabled')
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];self.label_data=load_dataset_labels()
-        if migrate_review_states(self.label_data):save_dataset_labels(self.label_data)
-        r.title("HVAC Territory Discovery v0.10.1 — Training-Safe Review & Label");r.geometry("1650x900")
-        t=ttk.Frame(r,padding=10);t.pack(fill="x")
-        ttk.Label(t,text="Virginia Beach test center:").grid(row=0,column=0)
-        self.q=tk.StringVar(value="717 General Booth Blvd");ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)
-        ttk.Label(t,text="Radius mi:").grid(row=0,column=2);self.rad=tk.StringVar(value="1.0");ttk.Entry(t,textvariable=self.rad,width=6).grid(row=0,column=3)
-        ttk.Label(t,text="Size threshold ft²:").grid(row=0,column=4);self.mn=tk.StringVar(value="10000");ttk.Entry(t,textvariable=self.mn,width=8).grid(row=0,column=5)
-        self.b=ttk.Button(t,text="Discover + Prescreen",command=self.start);self.b.grid(row=0,column=6,padx=8)
-        self.st=tk.StringVar(value="GIS discovery + training-safe human review. UNREVIEWED images are excluded from detector training.")
-        ttk.Label(r,textvariable=self.st).pack(fill="x",padx=10)
-
-        cs=("rank","facility","address","largest","bldgs","inspect","miles","land","tier","pre","gis","human","reviewed","boxes","source")
-        self.tree=ttk.Treeview(r,columns=cs,show="headings")
-        widths=(45,220,185,80,55,60,60,160,70,55,55,75,85,55,95)
-        for c,w in zip(cs,widths):self.tree.heading(c,text=c.upper());self.tree.column(c,width=w,anchor="w")
-        self.tree.pack(fill="both",expand=True,padx=10,pady=8)
-        self.tree.bind("<Double-1>",lambda e:self.review_selected())
-
-        f=ttk.Frame(r,padding=10);f.pack(fill="x")
-        ttk.Button(f,text="Download Aerial",command=self.dl).pack(side="left")
-        ttk.Button(f,text="Save Campus Images",command=self.save_campus).pack(side="left",padx=8)
-        ttk.Button(f,text="Review / Label Selected",command=self.review_selected).pack(side="left",padx=8)
-        ttk.Button(f,text="Export Training-Safe ZIP",command=self.export_zip).pack(side="left",padx=8)
-        ttk.Button(f,text="Full Dataset Backup",command=self.export_backup).pack(side="left",padx=8)
-        ttk.Button(f,text="Copy Address",command=self.copy).pack(side="left",padx=8)
-        ttk.Button(f,text="Dataset Summary",command=self.dataset_summary).pack(side="right",padx=8)
+        self.r=r;self.rows=[];self.cv=None;self.scan_running=False;self.last_scan_root=None
+        r.title('HVAC Territory Discovery v0.11.0 — Local CV Prospecting');r.geometry('1720x900')
+        t=ttk.Frame(r,padding=10);t.pack(fill='x')
+        ttk.Label(t,text='Virginia Beach center:').grid(row=0,column=0);self.q=tk.StringVar(value='717 General Booth Blvd');ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)
+        ttk.Label(t,text='Radius mi:').grid(row=0,column=2);self.rad=tk.StringVar(value='1.0');ttk.Entry(t,textvariable=self.rad,width=6).grid(row=0,column=3)
+        ttk.Label(t,text='Size threshold ft²:').grid(row=0,column=4);self.mn=tk.StringVar(value='10000');ttk.Entry(t,textvariable=self.mn,width=8).grid(row=0,column=5)
+        self.discb=ttk.Button(t,text='1. Discover + Prescreen',command=self.start);self.discb.grid(row=0,column=6,padx=8)
+        self.scanb=ttk.Button(t,text='2. Analyze Prescreened',command=self.analyze_prescreened);self.scanb.grid(row=0,column=7,padx=5)
+        self.st=tk.StringVar(value='Frozen local v0.0.12 CV — 0.07 / 0.35 / 0.45. No API key required.');ttk.Label(r,textvariable=self.st).pack(fill='x',padx=10)
+        cols=('rank','facility','address','cv','opp','evidence','maxp','largest','bldgs','mi','land','tier','pre','gis','source')
+        heads={'rank':'RANK','facility':'FACILITY','address':'ADDRESS','cv':'CV','opp':'OPP','evidence':'MODEL EVIDENCE HITS','maxp':'MAX P','largest':'LARGEST','bldgs':'BLDGS','mi':'MI','land':'LAND USE','tier':'GIS TIER','pre':'PRE','gis':'GIS','source':'FOOTPRINT'}
+        widths=(45,220,180,75,55,230,60,85,55,55,155,70,50,55,95)
+        self.tree=ttk.Treeview(r,columns=cols,show='headings')
+        for c,w in zip(cols,widths):self.tree.heading(c,text=heads[c]);self.tree.column(c,width=w,anchor='w')
+        self.tree.pack(fill='both',expand=True,padx=10,pady=8);self.tree.bind('<Double-1>',lambda e:self.details())
+        f=ttk.Frame(r,padding=10);f.pack(fill='x')
+        self.selb=ttk.Button(f,text='Analyze Selected',command=self.analyze_selected);self.selb.pack(side='left')
+        ttk.Button(f,text='Prospect Details',command=self.details).pack(side='left',padx=7);ttk.Button(f,text='Open Scan Folder',command=self.open_folder).pack(side='left',padx=7)
+        ttk.Separator(f,orient='vertical').pack(side='left',fill='y',padx=6);ttk.Button(f,text='Download Aerial',command=self.download_aerial).pack(side='left')
+        ttk.Button(f,text='Save Campus Images',command=self.save_campus).pack(side='left',padx=7);ttk.Button(f,text='Copy Address',command=self.copy_address).pack(side='left',padx=7)
 
     def start(self):
-        self.b.config(state="disabled");self.st.set("Querying GIS and applying non-vision prescreen...");threading.Thread(target=self.work,daemon=True).start()
+        if self.scan_running:return
+        self.discb.config(state='disabled');self.st.set('Querying GIS and applying high-recall prescreen...');threading.Thread(target=self.work,daemon=True).start()
     def work(self):
         try:
-            x,y=geocode(self.q.get().strip());mn=float(self.mn.get());self.rows,np,nb,nj,src,errs=discover(x,y,float(self.rad.get()),mn)
-            self.diag=(np,nb,nj,src,errs);self.apply_human_labels();self.r.after(0,self.show)
+            x,y=geocode(self.q.get().strip());self.rows,np_,nb,nj,src,errs=discover(x,y,float(self.rad.get()),float(self.mn.get()));self.diag=(np_,nb,nj,src,errs)
+            for z in self.rows:z.update(cv_status='',cv_score=None,cv_equipment='',cv_max_prob=None,cv_folder='')
+            self.r.after(0,self.show)
         except Exception as e:self.r.after(0,lambda e=e:self.fail(e))
-    def apply_human_labels(self):
-        sites=self.label_data.get("sites",{})
-        for z in self.rows:
-            s=sites.get(site_key(z),{});z["human_rating"]=s.get("rating","") if s.get("rating")!="UNRATED" else ""
-            ims=s.get("images",[]);reviewed=sum(1 for x in ims if image_review_state(x)!="UNREVIEWED")
-            z["human_reviewed"]=f"{reviewed}/{len(ims)}" if ims else ""
-            z["human_boxes"]=sum(len(x.get("annotations",[])) for x in ims if image_review_state(x)=="POSITIVE")
-    def rowvals(self,n,z):
-        fmt=lambda v:f"{v:,}" if v is not None else "UNKNOWN"
-        return (n,z.get("facility","") or "",z.get("address","") or "",fmt(z.get("largest")),z.get("count",0),len(meaningful_buildings(z)),
-                z.get("distance",""),z.get("land",""),z.get("tier",""),"YES" if z.get("pre") else "NO",z.get("score",""),
-                z.get("human_rating",""),z.get("human_reviewed",""),z.get("human_boxes",0),z.get("source",""))
     def show(self):
-        for i in self.tree.get_children():self.tree.delete(i)
-        for n,z in enumerate(self.rows,1):self.tree.insert("","end",iid=str(n-1),values=self.rowvals(n,z))
-        pre=sum(bool(z.get("pre")) for z in self.rows);np,nb,nj,src,errs=self.diag;warn=(" | fallback: "+errs[0][:70]) if errs and src!="VB CITY" else ""
-        self.st.set(f"{len(self.rows)} discovered | {pre} pass prescreen | parcels {np} | footprints {nb} | joined {nj} | {src}{warn}");self.b.config(state="normal")
+        self.refresh();pre=sum(bool(z.get('pre')) for z in self.rows);np_,nb,nj,src,errs=self.diag;warn=(' | fallback: '+errs[0][:70]) if errs and src!='VB CITY' else ''
+        self.st.set(f'{len(self.rows)} discovered | {pre} pass prescreen | parcels {np_} | footprints {nb} | joined {nj} | {src}{warn}');self.discb.config(state='normal')
     def refresh(self):
-        self.apply_human_labels();self.rows.sort(key=lambda z:(0 if z.get("human_rating")=="GOOD" else 1 if z.get("human_rating")=="MAYBE" else 2 if z.get("human_rating")=="POOR" else 3,
-                                                          0 if z.get("pre") else 1,-z.get("score",0),-(z.get("largest") or 0)))
-        for i in self.tree.get_children():self.tree.delete(i)
-        for n,z in enumerate(self.rows,1):self.tree.insert("","end",iid=str(n-1),values=self.rowvals(n,z))
-    def fail(self,e):self.st.set("Failed: "+repr(e));self.b.config(state="normal")
-    def selidx(self):
+        def k(z):
+            s=z.get('cv_status','');rank={'SURFACE':0,'QUIET':1,'ERROR':2,'':3}.get(s,3)
+            return (rank,-(z.get('cv_score') or 0),0 if z.get('pre') else 1,-(z.get('score') or 0),-(z.get('largest') or 0))
+        self.rows.sort(key=k)
+        for x in self.tree.get_children():self.tree.delete(x)
+        for n,z in enumerate(self.rows,1):
+            mp='' if z.get('cv_max_prob') is None else f"{100*z['cv_max_prob']:.0f}%";opp='' if z.get('cv_score') is None else z['cv_score'];largest='UNKNOWN' if z.get('largest') is None else f"{z['largest']:,}"
+            self.tree.insert('', 'end', iid=str(n-1), values=(n,z.get('facility',''),z.get('address',''),z.get('cv_status',''),opp,z.get('cv_equipment',''),mp,largest,z.get('count',0),z.get('distance',''),z.get('land',''),z.get('tier',''),'YES' if z.get('pre') else 'NO',z.get('score',''),z.get('source','')))
+    def fail(self,e):self.st.set('Failed: '+repr(e));self.discb.config(state='normal')
+    def sel(self):
         s=self.tree.selection()
-        if not s:messagebox.showinfo("Select","Select a candidate.");return None
-        return int(s[0])
-    def dl(self):
-        i=self.selidx()
-        if i is None:return
-        z=self.rows[i];out=Path.home()/"Downloads"/f'HVAC_{safe_name(z.get("address") or "candidate")}.jpg';self.st.set("Downloading aerial...")
+        if not s:messagebox.showinfo('Select','Select a candidate.');return None
+        return self.rows[int(s[0])]
+    def engine(self):
+        if self.cv is None:self.cv=LocalCV(lambda msg:self.r.after(0,lambda msg=msg:self.st.set(msg)))
+        return self.cv
+    def analyze_prescreened(self):
+        if self.scan_running:return
+        q=[z for z in self.rows if z.get('pre')]
+        if not q:messagebox.showinfo('Analyze','Run discovery first; no prescreened properties are available.');return
+        self.begin_scan(q)
+    def analyze_selected(self):
+        if self.scan_running:return
+        z=self.sel()
+        if z:self.begin_scan([z])
+    def begin_scan(self,sites):
+        self.scan_running=True;self.scanb.config(state='disabled');self.selb.config(state='disabled');threading.Thread(target=self.scan_worker,args=(list(sites),),daemon=True).start()
+    def scan_worker(self,sites):
+        stamp=datetime.now().strftime('%Y%m%d_%H%M%S');root=Path.home()/'Downloads'/f'HVAC_Prospecting_Scan_{stamp}';root.mkdir(parents=True,exist_ok=True);self.last_scan_root=root;rows=[]
+        try:
+            eng=self.engine()
+            for n,z in enumerate(sites,1):
+                fac=z.get('facility') or z.get('address') or f'site_{n}';folder=root/f"{n:03d}_{safe_name(fac+'_'+(z.get('address') or ''))[:100]}"
+                self.r.after(0,lambda n=n,fac=fac:self.st.set(f'Scanning {n}/{len(sites)} — {fac}'))
+                views=campus_images(z,folder/'source');cv=eng.scan_property(views,folder,lambda m,n=n,fac=fac:self.r.after(0,lambda m=m,n=n,fac=fac:self.st.set(f'{n}/{len(sites)} {fac}: {m}')))
+                z['cv_status']=cv['status'];z['cv_score']=opportunity_score(z,cv);z['cv_equipment']=hit_text(cv);z['cv_max_prob']=cv['max_prob'];z['cv_folder']=str(folder)
+                rows.append({'facility':z.get('facility',''),'address':z.get('address',''),'cv_status':z['cv_status'],'opportunity_score':z['cv_score'],'model_evidence_hits':z['cv_equipment'],'max_high_value_probability':round(cv['max_prob'],4),'stage1_proposals':cv['stage1_proposals'],'retained_evidence':cv['retained_evidence'],'gis_score':z.get('score',''),'gis_tier':z.get('tier',''),'prescreen':z.get('pre',False),'largest_building_ft2':z.get('largest',''),'building_count':z.get('count',0),'land_use':z.get('land',''),'distance_miles':z.get('distance',''),'result_folder':str(folder)})
+                self.write_csv(root,rows);self.r.after(0,self.refresh)
+            surf=sum(r['cv_status']=='SURFACE' for r in rows);(root/'SCAN_SUMMARY.txt').write_text(f'HVAC Territory Discovery v0.11.0\nFrozen pipeline v0.0.12\nThresholds 0.07 / 0.35 / 0.45\n\nProperties analyzed: {len(rows)}\nSurfaced: {surf}\nQuiet: {len(rows)-surf}\n\nEvidence hits are not exact unit counts.\n')
+            self.r.after(0,lambda:self.st.set(f'Scan complete: {surf}/{len(rows)} surfaced | {root}'));self.r.after(0,lambda:messagebox.showinfo('Scan Complete',f'Analyzed {len(rows)} properties.\nSurfaced {surf}.\n\nResults:\n{root}'))
+        except Exception as e:self.r.after(0,lambda e=e:messagebox.showerror('CV Scan Failed',repr(e)))
+        finally:self.scan_running=False;self.r.after(0,lambda:self.scanb.config(state='normal'));self.r.after(0,lambda:self.selb.config(state='normal'))
+    def write_csv(self,root,rows):
+        with (root/'prospecting_results.csv').open('w',newline='',encoding='utf-8') as f:w=csv.DictWriter(f,fieldnames=list(rows[0].keys()));w.writeheader();w.writerows(rows)
+    def details(self):
+        z=self.sel()
+        if z:DetailWindow(self.r,z)
+    def open_folder(self):
+        z=self.sel();p=Path(z['cv_folder']) if z and z.get('cv_folder') else self.last_scan_root
+        if not p or not Path(p).exists():messagebox.showinfo('Scan Folder','No completed scan folder is available.');return
+        p=Path(p)
+        try:
+            if sys.platform.startswith('win'):os.startfile(p)
+            elif sys.platform=='darwin':subprocess.Popen(['open',str(p)])
+            else:subprocess.Popen(['xdg-open',str(p)])
+        except Exception as e:self.st.set('Open folder failed: '+repr(e))
+    def download_aerial(self):
+        z=self.sel()
+        if not z:return
+        out=Path.home()/'Downloads'/f"HVAC_{safe_name(z.get('address') or 'candidate')}.jpg";self.st.set('Downloading aerial...')
         def w():
-            try:aerial(z["lon"],z["lat"],z.get("largest"),out);self.r.after(0,lambda:self.st.set("Saved "+str(out)))
-            except Exception as e:self.r.after(0,lambda:self.st.set("Download failed: "+repr(e)))
+            try:aerial(z['lon'],z['lat'],z.get('largest'),out);self.r.after(0,lambda:self.st.set('Saved '+str(out)))
+            except Exception as e:self.r.after(0,lambda:self.st.set('Download failed: '+repr(e)))
         threading.Thread(target=w,daemon=True).start()
     def save_campus(self):
-        i=self.selidx()
-        if i is None:return
-        z=self.rows[i];out=Path.home()/"Downloads"/f"HVAC_CAMPUS_{safe_name(z.get('address') or 'candidate')}";self.st.set("Generating campus/building images...")
+        z=self.sel()
+        if not z:return
+        out=Path.home()/'Downloads'/f"HVAC_CAMPUS_{safe_name(z.get('address') or 'candidate')}";self.st.set('Generating campus images...')
         def w():
             try:
-                imgs=campus_images(z,out);(out/"README.txt").write_text("00 is campus overview. B images are centered on meaningful associated buildings and include perimeter.\n\n"+"\n".join(f"{label}: {Path(p).name}" for label,p,_ in imgs))
-                self.r.after(0,lambda:self.st.set(f"Saved {len(imgs)} campus images to {out}"))
-            except Exception as e:self.r.after(0,lambda e=e:self.st.set("Save campus images failed: "+repr(e)))
+                q=campus_images(z,out);self.r.after(0,lambda:self.st.set(f'Saved {len(q)} images to {out}'))
+            except Exception as e:self.r.after(0,lambda:self.st.set('Campus image failed: '+repr(e)))
         threading.Thread(target=w,daemon=True).start()
-    def review_selected(self):
-        i=self.selidx()
-        if i is None:return
-        self.st.set("Generating review images...")
-        z=self.rows[i]
-        def w():
-            try:
-                safe=safe_name((z.get("facility") or "")+"_"+(z.get("address") or ""))
-                work=Path(tempfile.gettempdir())/f"hvac_label_{safe}_{abs(hash((z.get('lon'),z.get('lat'))))}"
-                imgs=campus_images(z,work)
-                self.r.after(0,lambda imgs=imgs:ReviewWindow(self,z,imgs))
-                self.r.after(0,lambda:self.st.set("Review images ready. Explicitly mark each image Positive, Negative, or leave Unreviewed."))
-            except Exception as e:self.r.after(0,lambda e=e:self.st.set("Review failed: "+repr(e)))
-        threading.Thread(target=w,daemon=True).start()
-    def export_zip(self):
-        try:
-            save_dataset_labels(self.label_data);out,stats=export_training_safe_zip(self.label_data)
-            self.st.set(f"Training-safe dataset exported: {out} | reviewed {stats['reviewed']} | excluded {stats['excluded']}")
-            msg=(f"Saved:\n{out}\n\nReviewed images: {stats['reviewed']}\n"
-                 f"Positive: {stats['positive']}\nNegative: {stats['negative']}\n"
-                 f"Boxes: {stats['boxes']}\nExcluded/unreviewed: {stats['excluded']}")
-            messagebox.showinfo("Training-Safe Export",msg)
-        except Exception as e:self.st.set("Dataset export failed: "+repr(e))
-    def export_backup(self):
-        try:
-            save_dataset_labels(self.label_data);out=export_full_backup_zip();self.st.set(f"Full dataset backup exported: {out}")
-        except Exception as e:self.st.set("Backup export failed: "+repr(e))
-    def dataset_summary(self):
-        sites=self.label_data.get("sites",{});ratings={k:0 for k in ("GOOD","MAYBE","POOR","UNRATED")}
-        boxes=pos=neg=un=images=0;counts={k:0 for k,_ in EQUIPMENT_CLASSES}
-        for s in sites.values():
-            ratings[s.get("rating","UNRATED")]=ratings.get(s.get("rating","UNRATED"),0)+1
-            for rec in s.get("images",[]):
-                images+=1;st=image_review_state(rec)
-                if st=="POSITIVE":pos+=1
-                elif st=="NEGATIVE":neg+=1
-                else:un+=1
-                if st=="POSITIVE":
-                    for a in rec.get("annotations",[]):
-                        boxes+=1;counts[a.get("class")]=counts.get(a.get("class"),0)+1
-        txt=(f"Sites: {len(sites)}\nGOOD {ratings.get('GOOD',0)} | MAYBE {ratings.get('MAYBE',0)} | POOR {ratings.get('POOR',0)} | UNRATED {ratings.get('UNRATED',0)}\n\n"
-             f"Images: {images}\nReviewed: {pos+neg}/{images} | Positive {pos} | Negative {neg} | Unreviewed {un}\n"
-             f"Training-safe target boxes: {boxes}\n\n")
-        txt+="\n".join(f"{k}: {counts.get(k,0)}" for k,_ in EQUIPMENT_CLASSES)
-        txt+="\n\nOnly Positive and Negative images are included in Training-Safe export. Unreviewed images are excluded."
-        messagebox.showinfo("Training Dataset Summary",txt)
-    def copy(self):
-        i=self.selidx()
-        if i is not None:
-            z=self.rows[i];self.r.clipboard_clear();self.r.clipboard_append(z.get("address","") or "");self.st.set("Address copied.")
+    def copy_address(self):
+        z=self.sel()
+        if z:self.r.clipboard_clear();self.r.clipboard_append(z.get('address',''));self.st.set('Address copied.')
 
-if __name__=="__main__":
+if __name__=='__main__':
     r=tk.Tk();App(r);r.mainloop()

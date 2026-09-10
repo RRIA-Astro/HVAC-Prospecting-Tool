@@ -1,51 +1,45 @@
-HVAC Territory Discovery v0.10.1 — Training-Safe Review & Label
+HVAC Territory Discovery v0.11.0 — Local CV Prospecting
+===========================================================
 
-PURPOSE
-Prevent unreviewed aerial images from silently becoming negative detector-training examples.
+This is the first prospecting build with the custom detector integrated into the territory-discovery app.
+It uses the GIS/property/campus logic from the previous app and replaces GPT vision as the primary equipment recognizer with the frozen v0.0.12 local CV pipeline. No OpenAI API key is required.
 
-IMAGE REVIEW STATES
+FROZEN OPERATING POINT
+- Stage 1 candidate: 0.07
+- Tower/chiller verifier: 0.35
+- Large packaged HVAC verifier: 0.45
 
-POSITIVE
-- The image has been fully inspected.
-- At least one high-value target is present.
-- ALL visible target-class equipment should be boxed.
-- A Positive image without a valid box is automatically treated as UNREVIEWED.
+ROUND-4 BLIND FIELD RESULT
+- Strict true-localized property recall: 16/18 = 88.9%
+- Business/property surface recall: 17/18 = 94.4%
+- Clean-negative property FPR: 5/22 = 22.7%
+- Cooling-tower localized site recall: 6/9 = 66.7%
+- Chiller localized site recall: 6/6 = 100%
+- Large-packaged localized site recall: 11/12 = 91.7%
 
-NEGATIVE
-- The image has been fully inspected.
-- No target-class equipment is present.
-- Ordinary small RTUs, splits, residential/light-commercial condensers and vents are background.
-- An explicit empty YOLO label file is created.
-
-UNREVIEWED
-- Not safe for detector training.
-- No YOLO label file is kept.
-- Excluded from Training-Safe export.
-
-MIGRATION FROM v0.10.0
-Conservative migration is automatic:
-- Existing image with target boxes -> POSITIVE.
-- Existing image explicitly marked Negative -> NEGATIVE.
-- Everything else -> UNREVIEWED, even if it had a GOOD/MAYBE/POOR image or site rating.
-
-NEW UI
-- Explicit Positive / Negative / Unreviewed state for every image.
-- Progress counter: Reviewed X/Y | Positive X | Negative X | Unreviewed X.
-- Discovery table shows reviewed-image progress for saved sites.
-- Drawing a target box automatically marks the image Positive.
-- Marking an annotated image Negative asks before deleting its target boxes.
-
-EXPORT TRAINING-SAFE ZIP
-- Includes ONLY reviewed Positive and Negative images.
-- Positive images include YOLO boxes.
-- Negative images include explicit empty YOLO label files.
-- Unreviewed images are absent.
-- Positive images without a valid box are excluded.
-- Includes classes.txt, dataset.yaml, review_manifest.csv and README.txt.
-
-FULL DATASET BACKUP
-- Copies the entire working HVAC_Training_Dataset folder, including unreviewed material.
-- Use for backup/transfer only, not direct model training.
+HOW TO USE
+1. Enter a Virginia Beach center address, radius, and size threshold.
+2. Click 1. Discover + Prescreen.
+3. Click 2. Analyze Prescreened.
+4. SURFACE properties rise to the top and receive an OPP score.
+5. Double-click a row for prospect details.
+6. Open Scan Folder to inspect prospecting_results.csv and annotated aerials.
+7. Analyze Selected can scan any individual property, even if it failed the GIS prescreen.
 
 IMPORTANT
-For a Positive image, box every visible instance of every target class. An unboxed visible target can otherwise be learned as background.
+MODEL EVIDENCE HITS are evidence hits across campus/building views, not guaranteed physical equipment-unit counts. Mechanical evidence dominates the OPP score; GIS can only add a small bonus. A QUIET result is not proof that no valuable mechanical opportunity exists.
+
+OUTPUT
+Downloads\HVAC_Prospecting_Scan_YYYYMMDD_HHMMSS\
+- prospecting_results.csv
+- SCAN_SUMMARY.txt
+- source aerials by property
+- annotated views with retained detections
+- cv_result.json per property
+
+WINDOWS BUILD
+Upload this source tree to GitHub, preserving .github/workflows/build-windows.yml and models/. Run the Build Windows EXE action. The artifact contains a portable folder zipped as HVAC_Territory_Discovery_v0110_Windows.zip.
+
+This build intentionally uses PyInstaller --onedir. Bundling PyTorch/Ultralytics into one giant self-extracting EXE would make startup much slower and is less reliable for this first integrated ML build.
+
+Keep v0.10.1 as the dedicated Training-Safe labeling app for now. v0.11.0 is focused on prospecting and model integration.

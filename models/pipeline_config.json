@@ -1,0 +1,37 @@
+{
+  "version": "v0.0.12-development",
+  "candidate_model": "candidate.pt",
+  "candidate_threshold": 0.07,
+  "candidate_selection": {
+    "threshold": 0.07,
+    "positive_sites": 16,
+    "localized_positive_sites": 16,
+    "positive_site_recall": 1.0,
+    "gt_objects": 159,
+    "matched_gt_objects": 96,
+    "object_recall": 0.6037735849056604,
+    "predictions": 213,
+    "matched_predictions": 96,
+    "proposal_precision": 0.4507042253521127,
+    "negative_sites": 42,
+    "negative_sites_with_proposal": 9,
+    "negative_site_proposal_rate": 0.21428571428571427,
+    "mean_negative_proposals": 0.6904761904761905,
+    "checkpoint": "best"
+  },
+  "verifier_model": "verifier12_multiclass.joblib",
+  "embedder_state": "resnet18_embedder_state.pt",
+  "feature_mode": "tight_numeric",
+  "tower_chiller_threshold": 0.6,
+  "large_packaged_threshold": 0.85,
+  "verifier_gate_passed_internal": true,
+  "threshold_gate": "true-localized positive-site recall >= 0.70 AND clean-negative site FPR <= 0.25",
+  "selection_method": "candidate site-group holdout + verifier 5-fold GroupKFold by physical property",
+  "note": "Frozen v0.0.12 pipeline. External validation must use untouched territory.",
+  "app_operating_point": {
+    "candidate_threshold": 0.07,
+    "tower_chiller_threshold": 0.35,
+    "large_packaged_threshold": 0.45,
+    "chosen_before_external_round4": true
+  }
+}
