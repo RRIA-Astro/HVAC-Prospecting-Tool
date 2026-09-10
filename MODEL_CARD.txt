@@ -7,3 +7,5 @@ Frozen thresholds: candidate 0.07; tower/chiller 0.35; large packaged 0.45.
 External Round-4 blind validation: 40 fresh properties; 18 target-positive; 22 clean negative. Strict localized positive-property recall 88.9% (16/18); property surface recall 94.4% (17/18); negative-property FPR 22.7% (5/22). Class localized recall: tower 66.7% (6/9), chiller 100% (6/6), large packaged 91.7% (11/12).
 
 This is a prospecting filter, not an engineering survey or inventory. Cooling towers remain the weakest class. QUIET is not proof of absence.
+
+Packaging note: v0.11.1 stores ResNet18 weights in FP16 and loads them into the normal FP32 network at runtime.

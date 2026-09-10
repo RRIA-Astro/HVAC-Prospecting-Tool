@@ -1,4 +1,4 @@
-HVAC Territory Discovery v0.11.0 — Local CV Prospecting
+HVAC Territory Discovery v0.11.1 — Local CV Prospecting
 ===========================================================
 
 This is the first prospecting build with the custom detector integrated into the territory-discovery app.
@@ -38,8 +38,29 @@ Downloads\HVAC_Prospecting_Scan_YYYYMMDD_HHMMSS\
 - cv_result.json per property
 
 WINDOWS BUILD
-Upload this source tree to GitHub, preserving .github/workflows/build-windows.yml and models/. Run the Build Windows EXE action. The artifact contains a portable folder zipped as HVAC_Territory_Discovery_v0110_Windows.zip.
+Upload this source tree to GitHub, preserving .github/workflows/build-windows.yml and models/. Run the Build Windows EXE action. The artifact contains a portable folder zipped as HVAC_Territory_Discovery_v0111_Windows.zip.
 
 This build intentionally uses PyInstaller --onedir. Bundling PyTorch/Ultralytics into one giant self-extracting EXE would make startup much slower and is less reliable for this first integrated ML build.
 
-Keep v0.10.1 as the dedicated Training-Safe labeling app for now. v0.11.0 is focused on prospecting and model integration.
+Keep v0.10.1 as the dedicated Training-Safe labeling app for now. v0.11.1 is focused on prospecting and model integration.
+
+
+v0.11.1 PACKAGING FIX
+---------------------
+The Stage-2 ResNet18 state is now stored as:
+  models\resnet18_embedder_state_fp16.pt
+
+Prior FP32 file: 42.7 MiB
+New FP16 file:   21.4 MiB
+
+The FP16 file is below GitHub's browser per-file upload limit.
+
+The GitHub Action now fails before building if a model file is missing, and fails
+after building if PyInstaller did not actually include all model assets.
+
+If CV startup still fails, the app writes:
+  Downloads\HVAC_CV_ERROR.txt
+with the full traceback and model paths.
+
+CV thresholds are unchanged:
+  candidate 0.07 / tower-chiller 0.35 / large packaged 0.45

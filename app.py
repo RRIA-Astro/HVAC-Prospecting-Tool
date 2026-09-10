@@ -1,4 +1,4 @@
-import base64,json,math,threading,tkinter as tk,urllib.parse,urllib.request,tempfile,time,shutil,sys,os,subprocess,csv
+import base64,json,math,threading,tkinter as tk,urllib.parse,urllib.request,tempfile,time,shutil,sys,os,subprocess,csv,traceback
 from tkinter import ttk,messagebox
 from pathlib import Path
 
@@ -11,7 +11,7 @@ AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/Ima
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.11.0"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.11.1"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -258,7 +258,7 @@ from datetime import datetime
 from PIL import Image,ImageTk,ImageDraw
 import numpy as np
 
-APP_VERSION='0.11.0'
+APP_VERSION='0.11.1'
 CANDIDATE_THRESHOLD=0.07
 TOWER_CHILLER_THRESHOLD=0.35
 LARGE_PACKAGED_THRESHOLD=0.45
@@ -270,7 +270,36 @@ def safe_name(s):
     return s.strip('_') or 'candidate'
 
 def resource_path(*parts):
-    return Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent)).joinpath(*parts)
+    bases=[]
+    if getattr(sys,'_MEIPASS',None):
+        bases.append(Path(sys._MEIPASS))
+    bases.extend([
+        Path(__file__).resolve().parent,
+        Path(sys.executable).resolve().parent,
+        Path(sys.executable).resolve().parent/'_internal',
+    ])
+    for base in bases:
+        p=base.joinpath(*parts)
+        if p.exists():
+            return p
+    return bases[0].joinpath(*parts)
+
+def required_asset(*parts):
+    p=resource_path(*parts)
+    if p.exists():
+        return p
+    searched=[]
+    if getattr(sys,'_MEIPASS',None):
+        searched.append(str(Path(sys._MEIPASS).joinpath(*parts)))
+    searched.extend([
+        str(Path(__file__).resolve().parent.joinpath(*parts)),
+        str(Path(sys.executable).resolve().parent.joinpath(*parts)),
+        str((Path(sys.executable).resolve().parent/'_internal').joinpath(*parts)),
+    ])
+    raise FileNotFoundError(
+        "Required model asset is missing: "+str(Path(*parts))+
+        "\n\nSearched:\n- "+"\n- ".join(dict.fromkeys(searched))
+    )
 
 def box_iou(a,b):
     x1=max(a[0],b[0]);y1=max(a[1],b[1]);x2=min(a[2],b[2]);y2=min(a[3],b[3])
@@ -304,12 +333,19 @@ class LocalCV:
         self.torch=torch
         try:torch.set_num_threads(max(1,min(8,(os.cpu_count() or 4)-1)))
         except:pass
-        self.candidate=YOLO(str(resource_path('models','candidate.pt')))
+        candidate_path=required_asset('models','candidate.pt')
+        if progress:progress('Loading Stage-1 candidate model...')
+        self.candidate=YOLO(str(candidate_path))
         self.embedder=resnet18(weights=None);self.embedder.fc=nn.Identity()
-        self.embedder.load_state_dict(torch.load(resource_path('models','resnet18_embedder_state.pt'),map_location='cpu'))
+        embedder_path=required_asset('models','resnet18_embedder_state_fp16.pt')
+        if progress:progress('Loading Stage-2 embedder model...')
+        embed_state=torch.load(embedder_path,map_location='cpu')
+        self.embedder.load_state_dict(embed_state)
         self.embedder.eval()
         self.tf=transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor(),transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])])
-        v=json.loads(resource_path('models','verifier_runtime.json').read_text())
+        verifier_path=required_asset('models','verifier_runtime.json')
+        if progress:progress('Loading Stage-2 verifier parameters...')
+        v=json.loads(verifier_path.read_text())
         self.mean=np.asarray(v['scaler_mean'],dtype=np.float32);self.scale=np.asarray(v['scaler_scale'],dtype=np.float32)
         self.coef=np.asarray(v['coef'],dtype=np.float32);self.intercept=np.asarray(v['intercept'],dtype=np.float32)
         self.idname={int(k):v for k,v in v['class_names_by_id'].items()}
@@ -408,7 +444,7 @@ class DetailWindow:
 class App:
     def __init__(self,r):
         self.r=r;self.rows=[];self.cv=None;self.scan_running=False;self.last_scan_root=None
-        r.title('HVAC Territory Discovery v0.11.0 — Local CV Prospecting');r.geometry('1720x900')
+        r.title('HVAC Territory Discovery v0.11.1 — Local CV Prospecting');r.geometry('1720x900')
         t=ttk.Frame(r,padding=10);t.pack(fill='x')
         ttk.Label(t,text='Virginia Beach center:').grid(row=0,column=0);self.q=tk.StringVar(value='717 General Booth Blvd');ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)
         ttk.Label(t,text='Radius mi:').grid(row=0,column=2);self.rad=tk.StringVar(value='1.0');ttk.Entry(t,textvariable=self.rad,width=6).grid(row=0,column=3)
@@ -479,9 +515,26 @@ class App:
                 z['cv_status']=cv['status'];z['cv_score']=opportunity_score(z,cv);z['cv_equipment']=hit_text(cv);z['cv_max_prob']=cv['max_prob'];z['cv_folder']=str(folder)
                 rows.append({'facility':z.get('facility',''),'address':z.get('address',''),'cv_status':z['cv_status'],'opportunity_score':z['cv_score'],'model_evidence_hits':z['cv_equipment'],'max_high_value_probability':round(cv['max_prob'],4),'stage1_proposals':cv['stage1_proposals'],'retained_evidence':cv['retained_evidence'],'gis_score':z.get('score',''),'gis_tier':z.get('tier',''),'prescreen':z.get('pre',False),'largest_building_ft2':z.get('largest',''),'building_count':z.get('count',0),'land_use':z.get('land',''),'distance_miles':z.get('distance',''),'result_folder':str(folder)})
                 self.write_csv(root,rows);self.r.after(0,self.refresh)
-            surf=sum(r['cv_status']=='SURFACE' for r in rows);(root/'SCAN_SUMMARY.txt').write_text(f'HVAC Territory Discovery v0.11.0\nFrozen pipeline v0.0.12\nThresholds 0.07 / 0.35 / 0.45\n\nProperties analyzed: {len(rows)}\nSurfaced: {surf}\nQuiet: {len(rows)-surf}\n\nEvidence hits are not exact unit counts.\n')
+            surf=sum(r['cv_status']=='SURFACE' for r in rows);(root/'SCAN_SUMMARY.txt').write_text(f'HVAC Territory Discovery v0.11.1\nFrozen pipeline v0.0.12\nThresholds 0.07 / 0.35 / 0.45\n\nProperties analyzed: {len(rows)}\nSurfaced: {surf}\nQuiet: {len(rows)-surf}\n\nEvidence hits are not exact unit counts.\n')
             self.r.after(0,lambda:self.st.set(f'Scan complete: {surf}/{len(rows)} surfaced | {root}'));self.r.after(0,lambda:messagebox.showinfo('Scan Complete',f'Analyzed {len(rows)} properties.\nSurfaced {surf}.\n\nResults:\n{root}'))
-        except Exception as e:self.r.after(0,lambda e=e:messagebox.showerror('CV Scan Failed',repr(e)))
+        except Exception as e:
+            detail=traceback.format_exc()
+            try:
+                diag=Path.home()/'Downloads'/'HVAC_CV_ERROR.txt'
+                diag.write_text(
+                    'HVAC Territory Discovery v0.11.1\n\n'+detail+
+                    '\nExecutable: '+str(sys.executable)+
+                    '\n_MEIPASS: '+str(getattr(sys,'_MEIPASS',None))+
+                    '\nCandidate asset: '+str(resource_path('models','candidate.pt'))+
+                    '\nEmbedder asset: '+str(resource_path('models','resnet18_embedder_state_fp16.pt'))+
+                    '\nVerifier asset: '+str(resource_path('models','verifier_runtime.json')),
+                    encoding='utf-8'
+                )
+                popup=str(e)+'\n\nFull diagnostic saved to:\n'+str(diag)
+            except Exception:
+                popup=str(e)+'\n\n'+detail
+            self.r.after(0,lambda popup=popup:self.st.set('CV scan failed. See HVAC_CV_ERROR.txt in Downloads.'))
+            self.r.after(0,lambda popup=popup:messagebox.showerror('CV Scan Failed',popup))
         finally:self.scan_running=False;self.r.after(0,lambda:self.scanb.config(state='normal'));self.r.after(0,lambda:self.selb.config(state='normal'))
     def write_csv(self,root,rows):
         with (root/'prospecting_results.csv').open('w',newline='',encoding='utf-8') as f:w=csv.DictWriter(f,fieldnames=list(rows[0].keys()));w.writeheader();w.writerows(rows)
