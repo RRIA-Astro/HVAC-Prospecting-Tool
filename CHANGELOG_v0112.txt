@@ -1,0 +1,21 @@
+HVAC Territory Discovery v0.11.2
+================================
+
+Detector model: unchanged v0.0.12
+Thresholds: unchanged 0.07 / 0.35 / 0.45
+
+Field-driven changes:
+- Parcel-centered campus overview and high-resolution campus coverage tiles.
+- Broader but explicitly labeled campus-adjacent search for true institutional campuses.
+- Detection-to-parcel geographic attribution; ordinary parcel tolerance 30 ft.
+- Outside-property detections logged/annotated but excluded from ranking.
+- Geographic cross-view de-duplication.
+- Approximate physical equipment sizing for packaged-HVAC ranking.
+- STRONG / REVIEW / QUIET triage.
+- Generic Public/Semi Public no longer gets 2,500-ft2 priority exception.
+- Town House/Townhome/Townhouse treated as residential.
+- Public/self-storage facility names do not inherit an industrial priority exception.
+- Prescreen reason shown and exported.
+- Persistent user review status/notes in prospecting_results.csv.
+- Open Existing Scan allows review to resume after restart.
+- view_manifest.json added to each source folder for coverage diagnostics.

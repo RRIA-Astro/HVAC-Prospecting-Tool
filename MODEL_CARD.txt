@@ -8,4 +8,4 @@ External Round-4 blind validation: 40 fresh properties; 18 target-positive; 22 c
 
 This is a prospecting filter, not an engineering survey or inventory. Cooling towers remain the weakest class. QUIET is not proof of absence.
 
-Packaging note: v0.11.1 stores ResNet18 weights in FP16 and loads them into the normal FP32 network at runtime.
+Packaging note: v0.11.2 continues to store ResNet18 weights in FP16 and loads them into the normal FP32 network at runtime. Detector weights and frozen thresholds are unchanged from v0.11.1. v0.11.2 changes property coverage, attribution, de-duplication, prescreening, and ranking rather than retraining the detector.

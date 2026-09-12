@@ -1,66 +1,89 @@
-HVAC Territory Discovery v0.11.1 — Local CV Prospecting
+HVAC Territory Discovery v0.11.2 — Property/Campus Cleanup
 ===========================================================
 
-This is the first prospecting build with the custom detector integrated into the territory-discovery app.
-It uses the GIS/property/campus logic from the previous app and replaces GPT vision as the primary equipment recognizer with the frozen v0.0.12 local CV pipeline. No OpenAI API key is required.
+v0.11.2 keeps the frozen v0.0.12 local detector and its recall-oriented thresholds unchanged, while fixing property-side issues found during the 185-property Virginia Beach field run.
 
-FROZEN OPERATING POINT
+FROZEN DETECTOR OPERATING POINT
 - Stage 1 candidate: 0.07
 - Tower/chiller verifier: 0.35
 - Large packaged HVAC verifier: 0.45
+- No OpenAI API key required.
 
-ROUND-4 BLIND FIELD RESULT
-- Strict true-localized property recall: 16/18 = 88.9%
-- Business/property surface recall: 17/18 = 94.4%
-- Clean-negative property FPR: 5/22 = 22.7%
-- Cooling-tower localized site recall: 6/9 = 66.7%
-- Chiller localized site recall: 6/6 = 100%
-- Large-packaged localized site recall: 11/12 = 91.7%
+WHY v0.11.2
+The field run showed that the detector itself was generally functioning well, but several errors were caused upstream/downstream by GIS, image framing, cross-view duplication, and ranking:
+- 1444 Diamond Springs (Virginia Tech) was a critical false negative because the useful building/towers were not adequately covered by the generated campus views.
+- Several false positives were real equipment on neighboring properties that happened to be in-frame.
+- Generic Public/Semi Public land use allowed many small residential properties through the old 2,500-ft2 priority exception.
+- Town House was not treated as residential.
+- Repeated views of one machine could inflate evidence counts.
+- Mid-sized packaged HVAC needed to remain detectable but should usually be additive rather than a strong prospect by itself.
+
+WHAT CHANGED
+1. Parcel/campus coverage
+   - Campus overview is centered on the parcel extent, not only selected building-footprint centroids.
+   - Campus-like properties receive overlapping high-resolution parcel coverage tiles.
+   - Institutional campuses can use a broader adjacent-campus search buffer so a central plant is not missed solely because parcel GIS splits a real campus.
+   - Each source folder now includes view_manifest.json with view centers, extents, and attribution settings.
+
+2. Property attribution
+   - Accepted detections are geolocated from image pixels back to approximate ground coordinates.
+   - Ordinary properties use a 30-ft parcel tolerance.
+   - True institutional campuses may retain farther campus-adjacent tower/chiller evidence, but it is explicitly labeled ADJ and ranks as REVIEW rather than being blindly treated as target-parcel equipment.
+   - Equipment beyond the allowed attribution buffer is logged in cv_result.json and annotated orange, but does not rank the property.
+
+3. Cross-view de-duplication
+   - Repeated detections of the same physical object in overlapping campus/building views are geographically de-duplicated.
+   - CSV evidence is therefore closer to physical evidence than the v0.11.1 raw hit count, though it is still not an engineering inventory.
+
+4. Prescreen sanitation
+   - Town House / Townhouse / Townhome are residential and do not pass.
+   - Generic Public/Semi Public no longer receives the 2,500-ft2 priority exception.
+   - Public Storage / Self Storage / Mini Storage are not granted an industrial priority exception merely because parcel land use says Industrial.
+   - Prescreen reason is shown in the table and written to prospecting_results.csv.
+
+5. Packaged-equipment triage
+   - Approximate equipment dimensions are derived from aerial scale.
+   - A few mid-sized packaged units can remain QUIET.
+   - Multiple/large packaged units can move a property to REVIEW or STRONG.
+   - Towers/chillers remain the highest priority and dominate ranking.
+   - This is intentionally approximate; dimensions are used as ranking evidence, not claimed tonnage.
+
+6. STRONG / REVIEW / QUIET
+   - STRONG: direct high-value evidence or convincing large packaged-equipment concentration.
+   - REVIEW: worthwhile ambiguity, including mid-sized cumulative capacity or campus-adjacent tower/chiller evidence.
+   - QUIET: no retained high-value evidence after attribution/ranking.
+
+7. Persistent manual review
+   - Mark a selected row STRONG / REVIEW / QUIET and add a note.
+   - Review status is written immediately into prospecting_results.csv.
+   - Open Existing Scan reloads a prior scan folder after a restart so review progress is not lost.
 
 HOW TO USE
 1. Enter a Virginia Beach center address, radius, and size threshold.
 2. Click 1. Discover + Prescreen.
-3. Click 2. Analyze Prescreened.
-4. SURFACE properties rise to the top and receive an OPP score.
-5. Double-click a row for prospect details.
-6. Open Scan Folder to inspect prospecting_results.csv and annotated aerials.
-7. Analyze Selected can scan any individual property, even if it failed the GIS prescreen.
-
-IMPORTANT
-MODEL EVIDENCE HITS are evidence hits across campus/building views, not guaranteed physical equipment-unit counts. Mechanical evidence dominates the OPP score; GIS can only add a small bonus. A QUIET result is not proof that no valuable mechanical opportunity exists.
+3. Review the PRESCREEN REASON column if a property looks unexpected.
+4. Click 2. Analyze Prescreened.
+5. STRONG and REVIEW properties rise above QUIET properties.
+6. Double-click a row for details or open the saved scan folder for imagery.
+7. Use Mark STRONG / REVIEW / QUIET and Edit Note during field review.
+8. After a restart, click Open Existing Scan and choose the HVAC_Prospecting_Scan_* folder.
 
 OUTPUT
 Downloads\HVAC_Prospecting_Scan_YYYYMMDD_HHMMSS\
 - prospecting_results.csv
 - SCAN_SUMMARY.txt
-- source aerials by property
-- annotated views with retained detections
-- cv_result.json per property
+- one folder per analyzed property
+  - source aerials
+  - source\view_manifest.json
+  - annotated views
+  - cv_result.json
+
+IMPORTANT
+This is a sales-prospecting filter, not an engineering survey. A QUIET result is not proof that valuable mechanical equipment is absent. The operating philosophy is deliberately asymmetric: false positives cost review time, while a missed cooling tower or chiller can hide a valuable opportunity.
 
 WINDOWS BUILD
-Upload this source tree to GitHub, preserving .github/workflows/build-windows.yml and models/. Run the Build Windows EXE action. The artifact contains a portable folder zipped as HVAC_Territory_Discovery_v0111_Windows.zip.
+Upload this source tree to GitHub, preserving .github/workflows/build-windows.yml and models/. Run the Build Windows EXE workflow. The artifact will be HVAC_Territory_Discovery_v0112_Windows.zip.
 
-This build intentionally uses PyInstaller --onedir. Bundling PyTorch/Ultralytics into one giant self-extracting EXE would make startup much slower and is less reliable for this first integrated ML build.
+The build remains PyInstaller --onedir because PyTorch/Ultralytics is more reliable this way. The FP16 ResNet18 state remains below GitHub's browser per-file upload limit.
 
-Keep v0.10.1 as the dedicated Training-Safe labeling app for now. v0.11.1 is focused on prospecting and model integration.
-
-
-v0.11.1 PACKAGING FIX
----------------------
-The Stage-2 ResNet18 state is now stored as:
-  models\resnet18_embedder_state_fp16.pt
-
-Prior FP32 file: 42.7 MiB
-New FP16 file:   21.4 MiB
-
-The FP16 file is below GitHub's browser per-file upload limit.
-
-The GitHub Action now fails before building if a model file is missing, and fails
-after building if PyInstaller did not actually include all model assets.
-
-If CV startup still fails, the app writes:
-  Downloads\HVAC_CV_ERROR.txt
-with the full traceback and model paths.
-
-CV thresholds are unchanged:
-  candidate 0.07 / tower-chiller 0.35 / large packaged 0.45
+Keep v0.10.1 as the dedicated Training-Safe labeling app. v0.11.2 remains a prospecting/field-validation build.
