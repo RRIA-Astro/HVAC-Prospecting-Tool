@@ -1,0 +1,19 @@
+HVAC Territory Discovery v0.11.4 — Regression Notes
+====================================================
+
+Built from v0.11.3 field run HVAC_Prospecting_Scan_20260912_161704.
+
+Saved-result ranking regression (no model rerun):
+- 1245 Miller Store: REVIEW -> STRONG (known real air-cooled chiller; desired)
+- Coast Guard Station site 118: REVIEW -> STRONG (known real air-cooled chiller; desired)
+- 1400 Air Rail: STRONG -> REVIEW (landscaping/tower lookalike; desired demotion)
+- 1609 Diamond Springs: STRONG -> REVIEW (clutter/chiller lookalike; desired demotion)
+- 5708 Northampton remains REVIEW (known false positive; does not regain STRONG)
+
+5925 Thurston rescue geometry check:
+- On a 1800 x 1800 MECH FOCUS image, normal inference tiles start at 0 and 776 px.
+- v0.11.4 adds shifted starts at 388 px, yielding five additional overlap tiles.
+- The suspected side-yard heat-rejection unit at approximately x=1540, y=950 is covered by the right-middle tile (776,388) at local x=764, y=562, giving approximately 260 px minimum margin from a tile edge instead of appearing close to a seam.
+- Actual Stage-1 recovery cannot be executed in this development container because Ultralytics is not installed and network package installation is unavailable. The Windows/GitHub run is the integration test.
+
+Detector weights and normal thresholds remain unchanged.
