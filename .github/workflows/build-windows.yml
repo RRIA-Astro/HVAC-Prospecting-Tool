@@ -41,7 +41,7 @@ jobs:
         shell: cmd
         run: >
           pyinstaller --noconfirm --clean --onedir --windowed
-          --name HVAC_Territory_Discovery_v0113
+          --name HVAC_Territory_Discovery_v0114
           --add-data "models;models"
           --collect-all ultralytics
           --collect-submodules torchvision
@@ -50,7 +50,7 @@ jobs:
       - name: Verify bundled model assets
         shell: powershell
         run: |
-          $root = "dist\HVAC_Territory_Discovery_v0113"
+          $root = "dist\HVAC_Territory_Discovery_v0114"
           $names = @("candidate.pt","resnet18_embedder_state_fp16.pt","verifier_runtime.json")
           foreach ($name in $names) {
             $match = Get-ChildItem $root -Recurse -File -Filter $name | Select-Object -First 1
@@ -61,14 +61,14 @@ jobs:
       - name: Add documentation
         shell: powershell
         run: |
-          Copy-Item README.txt dist\HVAC_Territory_Discovery_v0113\
-          Copy-Item MODEL_CARD.txt dist\HVAC_Territory_Discovery_v0113\
+          Copy-Item README.txt dist\HVAC_Territory_Discovery_v0114\
+          Copy-Item MODEL_CARD.txt dist\HVAC_Territory_Discovery_v0114\
 
       - name: Zip portable app
         shell: powershell
-        run: Compress-Archive -Path dist\HVAC_Territory_Discovery_v0113\* -DestinationPath HVAC_Territory_Discovery_v0113_Windows.zip -Force
+        run: Compress-Archive -Path dist\HVAC_Territory_Discovery_v0114\* -DestinationPath HVAC_Territory_Discovery_v0114_Windows.zip -Force
 
       - uses: actions/upload-artifact@v4
         with:
-          name: HVAC-Territory-Discovery-v0113-Windows
-          path: HVAC_Territory_Discovery_v0113_Windows.zip
+          name: HVAC-Territory-Discovery-v0114-Windows
+          path: HVAC_Territory_Discovery_v0114_Windows.zip
