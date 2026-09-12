@@ -8,4 +8,8 @@ External Round-4 blind validation: 40 fresh properties; 18 target-positive; 22 c
 
 This is a prospecting filter, not an engineering survey or inventory. Cooling towers remain the weakest class. QUIET is not proof of absence.
 
-Packaging note: v0.11.2 continues to store ResNet18 weights in FP16 and loads them into the normal FP32 network at runtime. Detector weights and frozen thresholds are unchanged from v0.11.1. v0.11.2 changes property coverage, attribution, de-duplication, prescreening, and ranking rather than retraining the detector.
+Packaging note: v0.11.3 continues to store ResNet18 weights in FP16 and loads them into the normal FP32 network at runtime. Detector weights and frozen thresholds are unchanged from v0.11.1. v0.11.3 changes property coverage, attribution, de-duplication, prescreening, and ranking rather than retraining the detector.
+
+
+v0.11.3 field logic note:
+The underlying v0.0.12 Stage-1 and verifier weights remain unchanged. Primary thresholds remain 0.07 / 0.35 / 0.45. v0.11.3 adds a separate REVIEW-only thermal rescue path at target probability 0.22 for shifted-center passes on high-value properties that otherwise have no retained tower/chiller evidence. Rescue evidence below 0.35 cannot be STRONG. Large packaged detections are also subjected to building-context and tile-edge ranking checks; these do not change detector weights.

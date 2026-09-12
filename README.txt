@@ -1,62 +1,81 @@
-HVAC Territory Discovery v0.11.2 — Property/Campus Cleanup
-===========================================================
+HVAC Territory Discovery v0.11.3 — Recall Rescue + Context Cleanup
+===================================================================
 
-v0.11.2 keeps the frozen v0.0.12 local detector and its recall-oriented thresholds unchanged, while fixing property-side issues found during the 185-property Virginia Beach field run.
+v0.11.3 keeps the frozen v0.0.12 local detector and its primary recall-oriented thresholds unchanged while incorporating the field lessons from the v0.11.2 Virginia Beach A/B run.
 
-FROZEN DETECTOR OPERATING POINT
+PRIMARY DETECTOR OPERATING POINT — UNCHANGED
 - Stage 1 candidate: 0.07
 - Tower/chiller verifier: 0.35
 - Large packaged HVAC verifier: 0.45
 - No OpenAI API key required.
 
-WHY v0.11.2
-The field run showed that the detector itself was generally functioning well, but several errors were caused upstream/downstream by GIS, image framing, cross-view duplication, and ranking:
-- 1444 Diamond Springs (Virginia Tech) was a critical false negative because the useful building/towers were not adequately covered by the generated campus views.
-- Several false positives were real equipment on neighboring properties that happened to be in-frame.
-- Generic Public/Semi Public land use allowed many small residential properties through the old 2,500-ft2 priority exception.
-- Town House was not treated as residential.
-- Repeated views of one machine could inflate evidence counts.
-- Mid-sized packaged HVAC needed to remain detectable but should usually be additive rather than a strong prospect by itself.
+NEW THERMAL REVIEW RESCUE
+- Tower/chiller recall is treated as the primary KPI.
+- Very large buildings receive higher-resolution MECH FOCUS views around the building and immediate perimeter.
+- If a high-value property has no accepted tower/chiller after the normal scan, up to two focus/building views receive a shifted-center Stage-1 rescue pass.
+- A rescue tower/chiller candidate that still clears 0.35 is normal retained evidence.
+- A plausible rescue candidate between 0.22 and 0.35 can produce REVIEW only. It cannot produce STRONG.
+- This deliberately accepts some additional review workload to reduce the chance of silently missing a real tower/fluid cooler/chiller.
 
-WHAT CHANGED
-1. Parcel/campus coverage
-   - Campus overview is centered on the parcel extent, not only selected building-footprint centroids.
-   - Campus-like properties receive overlapping high-resolution parcel coverage tiles.
-   - Institutional campuses can use a broader adjacent-campus search buffer so a central plant is not missed solely because parcel GIS splits a real campus.
-   - Each source folder now includes view_manifest.json with view centers, extents, and attribution settings.
+WHY THIS WAS ADDED
+The v0.11.2 targeted quiet audit was strong overall, but 5925 Thurston contained a small tower/fluid-cooler-like object beside a large industrial building that should have been bubbled up. The normal scan had Stage-1 activity but retained no high-value evidence. v0.11.3 improves both image scale and tile/context coverage for that failure mode without globally lowering the frozen tower/chiller threshold.
 
-2. Property attribution
-   - Accepted detections are geolocated from image pixels back to approximate ground coordinates.
-   - Ordinary properties use a 30-ft parcel tolerance.
-   - True institutional campuses may retain farther campus-adjacent tower/chiller evidence, but it is explicitly labeled ADJ and ranks as REVIEW rather than being blindly treated as target-parcel equipment.
-   - Equipment beyond the allowed attribution buffer is logged in cv_result.json and annotated orange, but does not rank the property.
+PACKAGED-EQUIPMENT CONTEXT CLEANUP
+Large packaged HVAC is useful but secondary to tower/chiller recall. Field review found recurring truck/trailer/loading-area false positives.
 
-3. Cross-view de-duplication
-   - Repeated detections of the same physical object in overlapping campus/building views are geographically de-duplicated.
-   - CSV evidence is therefore closer to physical evidence than the v0.11.1 raw hit count, though it is still not an engineering inventory.
+v0.11.3 therefore prevents a packaged-only detection from driving ranking when:
+- the detection is clipped by an internal 1024-pixel inference-tile seam, or
+- its center is more than 45 ft from the nearest mapped building footprint.
 
-4. Prescreen sanitation
-   - Town House / Townhouse / Townhome are residential and do not pass.
-   - Generic Public/Semi Public no longer receives the 2,500-ft2 priority exception.
-   - Public Storage / Self Storage / Mini Storage are not granted an industrial priority exception merely because parcel land use says Industrial.
-   - Prescreen reason is shown in the table and written to prospecting_results.csv.
+The detection is still preserved in cv_result.json for auditability and the evidence text reports context-rejected packaged evidence. This intentionally favors precision for packaged equipment while leaving tower/chiller sensitivity alone.
 
-5. Packaged-equipment triage
-   - Approximate equipment dimensions are derived from aerial scale.
-   - A few mid-sized packaged units can remain QUIET.
-   - Multiple/large packaged units can move a property to REVIEW or STRONG.
-   - Towers/chillers remain the highest priority and dominate ranking.
-   - This is intentionally approximate; dimensions are used as ranking evidence, not claimed tonnage.
+THERMAL TRIAGE
+- Direct tower/chiller evidence with physical long dimension >=22 ft can drive STRONG.
+- Smaller direct tower/chiller evidence is still surfaced, but as REVIEW.
+- Campus-adjacent tower/chiller evidence remains REVIEW.
+- Below-0.35 rescue evidence remains REVIEW only.
+- Multiple/large packaged units can still drive STRONG/REVIEW when they pass package context checks.
 
-6. STRONG / REVIEW / QUIET
-   - STRONG: direct high-value evidence or convincing large packaged-equipment concentration.
-   - REVIEW: worthwhile ambiguity, including mid-sized cumulative capacity or campus-adjacent tower/chiller evidence.
-   - QUIET: no retained high-value evidence after attribution/ranking.
+PRESCREEN SANITATION
+v0.11.3 adds a repeated-small-building-complex filter to catch townhouse-style developments even when the parcel is mislabeled Public/Semi Public or otherwise non-residential.
 
-7. Persistent manual review
-   - Mark a selected row STRONG / REVIEW / QUIET and add a note.
-   - Review status is written immediately into prospecting_results.csv.
-   - Open Existing Scan reloads a prior scan folder after a restart so review progress is not lost.
+A property can be filtered when it has:
+- 40+ building footprints,
+- at least 85% of footprints under 15,000 ft2,
+- largest building under 30,000 ft2,
+- average building size under 12,000 ft2,
+- and no protected institutional/industrial context.
+
+University, college, Virginia Tech, military, hospital/medical, industrial/manufacturing, utility, government, school, pump-station, and substation contexts are protected from this morphology filter.
+
+PROPERTY/CAMPUS LOGIC RETAINED FROM v0.11.2
+- Parcel-centered overview and high-resolution parcel tiles.
+- Broader but explicitly labeled campus-adjacent search for true institutional campuses.
+- Detection-to-parcel geographic attribution.
+- Ordinary parcel tolerance: 30 ft.
+- Outside-property detections logged but excluded from ranking.
+- Geographic cross-view de-duplication.
+- Approximate physical equipment sizing.
+- STRONG / REVIEW / QUIET triage.
+- Persistent user review status/notes.
+- Open Existing Scan after restart.
+
+NEW DIAGNOSTICS
+Each detection can now record:
+- approximate width/height/long dimension in feet,
+- distance from parcel,
+- distance from nearest mapped building,
+- source view kind,
+- internal-tile-edge flag,
+- rescue flag,
+- REVIEW-only rescue flag.
+
+cv_result.json adds:
+- stage1_rescue_proposals
+- thermal_rescue_evidence
+- thermal_review_only_evidence
+
+If rescue evidence is found, the annotated folder also includes RESCUE_*.jpg overlays in yellow.
 
 HOW TO USE
 1. Enter a Virginia Beach center address, radius, and size threshold.
@@ -76,14 +95,15 @@ Downloads\HVAC_Prospecting_Scan_YYYYMMDD_HHMMSS\
   - source aerials
   - source\view_manifest.json
   - annotated views
+  - annotated\RESCUE_*.jpg when rescue evidence exists
   - cv_result.json
 
 IMPORTANT
-This is a sales-prospecting filter, not an engineering survey. A QUIET result is not proof that valuable mechanical equipment is absent. The operating philosophy is deliberately asymmetric: false positives cost review time, while a missed cooling tower or chiller can hide a valuable opportunity.
+This is a sales-prospecting filter, not an engineering survey. A QUIET result is not proof that valuable mechanical equipment is absent. The operating philosophy remains asymmetric: false positives cost review time, while a missed cooling tower or chiller can hide a valuable opportunity.
 
 WINDOWS BUILD
-Upload this source tree to GitHub, preserving .github/workflows/build-windows.yml and models/. Run the Build Windows EXE workflow. The artifact will be HVAC_Territory_Discovery_v0112_Windows.zip.
+Upload this source tree to GitHub, preserving .github/workflows/build-windows.yml and models/. Run the Build Windows EXE workflow. The artifact will be HVAC_Territory_Discovery_v0113_Windows.zip.
 
 The build remains PyInstaller --onedir because PyTorch/Ultralytics is more reliable this way. The FP16 ResNet18 state remains below GitHub's browser per-file upload limit.
 
-Keep v0.10.1 as the dedicated Training-Safe labeling app. v0.11.2 remains a prospecting/field-validation build.
+Keep v0.10.1 as the dedicated Training-Safe labeling app. v0.11.3 remains a prospecting/field-validation build.

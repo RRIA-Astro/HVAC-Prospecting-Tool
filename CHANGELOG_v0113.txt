@@ -1,0 +1,39 @@
+HVAC Territory Discovery v0.11.3
+================================
+
+Detector model: unchanged v0.0.12
+Primary thresholds: unchanged 0.07 / 0.35 / 0.45
+Thermal REVIEW rescue threshold: 0.22 (new, REVIEW-only below 0.35)
+
+Field-driven changes after the v0.11.2 Virginia Beach A/B run:
+
+1. Tower/chiller recall rescue
+- Added higher-resolution MECH FOCUS views around very large buildings (>=75,000 ft2).
+- Focus coverage includes roughly 70 ft beyond the building perimeter so side-yard towers/fluid coolers/chillers are easier to see.
+- If a high-value property still has no accepted tower/chiller, up to two building/focus views receive one shifted-center Stage-1 rescue pass.
+- A rescue candidate that meets the frozen 0.35 tower/chiller verifier threshold is normal evidence.
+- A plausible rescue candidate between 0.22 and 0.35 can surface only as REVIEW, never STRONG.
+- This is intended for cases like 5925 Thurston: a tower/fluid-cooler-like object should be bubbled up rather than silently left QUIET.
+
+2. Packaged-equipment context cleanup
+- Large-packaged detections clipped by an internal inference-tile seam no longer drive ranking.
+- Large-packaged detections more than 45 ft from the nearest mapped building no longer drive ranking.
+- They remain in cv_result.json as model evidence, but are labeled in the evidence text as context-rejected.
+- This specifically targets recurring truck/trailer/loading-area false positives without tightening tower/chiller sensitivity.
+
+3. Cross-class de-duplication
+- Tower/chiller boxes with meaningful overlap can now de-duplicate even when the verifier gives the same physical object different class labels in overlapping proposals/views.
+- Small direct tower/chiller evidence (<22 ft long dimension) is surfaced as REVIEW rather than automatically STRONG.
+
+4. Prescreen sanitation
+- Added a repeated-small-building-complex rule for cases where parcel land-use coding is wrong.
+- Properties with 40+ mostly-small footprints, largest building under 30,000 ft2, and no protected industrial/institutional context are filtered before CV.
+- True university, military, school, hospital, government, utility, manufacturing, and industrial campuses are exempt.
+
+5. Diagnostics
+- cv_result.json now records Stage-1 rescue proposals and thermal rescue evidence.
+- Detection records include nearest-building distance, view kind, internal-tile-edge status, and rescue/review-only flags.
+- Rescue overlays are saved as RESCUE_*.jpg in the annotated folder.
+- prospecting_results.csv includes average building size and thermal-rescue counters.
+
+The detector weights were not retrained. v0.11.3 remains a property/context/ranking build focused on recall protection for towers/chillers and cleanup of recurring non-HVAC clutter.
