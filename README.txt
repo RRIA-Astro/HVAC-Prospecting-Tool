@@ -1,5 +1,5 @@
-HVAC Territory Discovery v0.11.6 — Precision Ownership
-=======================================================
+HVAC Territory Discovery v0.11.7 — Diagnostic Calibration
+==========================================================
 
 Purpose
 -------
@@ -11,34 +11,36 @@ This is a prospecting filter, not an engineering survey or equipment inventory. 
 means investigate further. QUIET means no rankable evidence was observed in the available imagery;
 it does not prove that valuable equipment is absent.
 
-What v0.11.6 changes
+What v0.11.7 changes
 --------------------
-This build converts the September 13 field review into three narrow precision controls while
-leaving the successful v0.11.5 detector and rescue operating points frozen.
+This build converts the 250-property September 13 field review and its 11-property diagnostic subset
+into bounded ranking changes while leaving the v0.0.12 detector, verifier, image acquisition, model
+thresholds, rescue thresholds, and v0.11.6 prescreen frozen.
 
-1. Ambiguous small Public/Semi Public parcels are stopped at prescreen. Virginia Beach parcel data
-   can apply that use code to residential common-interest areas, while a nearby street or court
-   name is attached as the facility. A site below 8,000 ft2 with at most two buildings now needs
-   explicit institutional or utility identity (for example school, church, medical, government,
-   fire/police, library, utility, pump station, substation, water treatment, or military).
-2. A normal thermal box at least 32 x 28 ft is context-rejected when both total thermal probability
-   is below 0.55 and best-class probability is below 0.30. This removes the broad debris lookalike
-   at 1609 Diamond Springs without moving the underlying model thresholds.
-3. After a batch scan, near-identical thermal detections seen from two ordinary parcel scans are
-   assigned to one property. A mapped containing parcel wins first, followed by parcel distance,
-   building distance, and confidence. The losing site's raw detection remains auditable and is
-   reported as Neighbor-assigned evidence. Campus-adjacent evidence is excluded from this rule.
+1. Package boxes from overview/parcel-tile views more than 5 ft from a mapped building are rejected,
+   except for an established very-high-certainty close-footprint control. Weak package hypotheses
+   below both p=0.55 and best class=0.35 are also rejected. These rules remove the loading canopy at
+   2682 Dean, emergency/generator equipment at 1243 Bayne, the Hobby Lobby semi-trailer, and yard
+   clutter at 189 Rosemont.
+2. A seam-cut package can rank only when a strong non-seam raw observation corroborates the same
+   machine. An all-seam package result is REVIEW-only. This recovers the two real 50-100 ton units at
+   484 Viking without reopening ordinary seam false positives.
+3. One on-building package at least 25 ft with p>=0.65 and best class>=0.55 can create REVIEW. This
+   narrowly surfaces the approximately 26 ft AHU at 777 Seahawk.
+4. Rescue-only thermal boxes are rejected when they are more than 45 ft from a building on a site
+   below 8,000 ft2, or when a compact review-only box below 22 ft has both p<0.70 and best class<0.40.
+   These remove the 2856 Crusader yard debris and 2697 International residential condenser controls.
+5. A compact rooftop tower label below 30 ft on a Commercial building of at least 100,000 ft2 remains
+   visible but cannot create STRONG alone. Hobby Lobby therefore becomes REVIEW, not STRONG.
+6. When all verified equipment paths are empty, a military/federal site with at least a 30,000 ft2
+   building and one normal Stage-1 proposal can receive REVIEW. Its evidence text explicitly says
+   "Strategic-site unverified proposal" and does not claim recognized equipment. This catches NAS
+   Oceana - NEXCOM HQ while preserving the known fanless-equipment limitation.
 
-Replay of the completed 178-property v0.11.5 field scan changes only two imagery-ranking outcomes:
-
-- 1609 Diamond Springs: REVIEW -> QUIET (broad weak debris shape).
-- 5901 Thurston: REVIEW -> QUIET (the same physical fan bank is assigned to 5925 Thurston).
-
-The resulting stored-evidence replay is 15 STRONG, 19 REVIEW, and 144 QUIET. 5925 Thurston remains
-REVIEW. 1700 Shelton and 5580 Shell remain REVIEW, and 5501 Wesleyan remains QUIET. On fresh
-discovery, the precision prescreen filters 40 ambiguous residential-scale Public/Semi Public rows
-from that territory before imagery, including 1149 and 1165 Pond Cypress, 1424 Pandoria, and 5781
-Lake Edward. It preserves the explicitly identified Virginia Tech property at 1444 Diamond Springs.
+The diagnostic replay keeps 509 Viking and 477 Viking STRONG; moves 2682 Dean, 2697 International,
+2856 Crusader, 1243 Bayne, and 189 Rosemont to QUIET; moves 777 Seahawk, NEXCOM HQ, and 484 Viking to
+REVIEW; and downgrades Hobby Lobby from STRONG to REVIEW. See REGRESSION_NOTES_v0117.txt for exact
+evidence and limitations.
 
 Inherited v0.11.5 perimeter recall
 ----------------------------------
@@ -155,7 +157,7 @@ Build the portable Windows app
 Upload this source tree to GitHub with .github/workflows/build-windows.yml and models/ intact. Run
 the Build Windows EXE workflow. The artifact will be:
 
-  HVAC_Territory_Discovery_v0116_Windows.zip
+  HVAC_Territory_Discovery_v0117_Windows.zip
 
 Extract that ZIP before running the EXE. Keep the generated folder together because PyInstaller
 onedir dependencies and model assets are required at runtime.
@@ -164,11 +166,11 @@ Validation
 ----------
 Run:
 
-  python -m unittest -v test_v0116_logic.py
+  python -m unittest -v test_v0117_logic.py
 
 The suite checks frozen thresholds, 5925 zoom coverage, zoom coordinate mapping, smaller-priority
 rescue routing, known package/thermal context cases, the 1609 debris rejection, ambiguous-small-
 public prescreening, cross-view and cross-property fusion, and storage morphology.
 
-Keep v0.10.1 as the dedicated Training-Safe labeling app. v0.11.6 remains the prospecting and
+Keep v0.10.1 as the dedicated Training-Safe labeling app. v0.11.7 remains the prospecting and
 field-validation build.

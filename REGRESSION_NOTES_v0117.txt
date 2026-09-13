@@ -1,0 +1,84 @@
+HVAC Territory Discovery v0.11.7 — Regression Notes
+====================================================
+
+Input field run
+---------------
+HVAC_Prospecting_Scan_20260913, produced by v0.11.6: 250 properties, 60 STRONG, 35 REVIEW,
+and 155 QUIET.
+
+User review
+-----------
+All 95 surfaced properties and 58 QUIET properties were manually assessed. Of the sampled QUIET
+properties, 55 were correct, two were acceptable/borderline package misses, and one was a material
+miss involving probable fanless heat-rejection equipment beside mechanical penthouses.
+
+The user corrected the note for 477 Viking / Pinehurst Center: STRONG is correct because the roof
+contains two large AHUs and remote condensing equipment.
+
+Diagnostic subset replay
+------------------------
+The supplied 11-property diagnostic subset contains source imagery, annotations, and cv_result.json
+for the principal misses, representative false positives, and two positive controls. Replaying the
+stored detections through v0.11.7 produces:
+
+- 015 / 509 Viking: STRONG -> STRONG. Positive cooling-tower control remains protected.
+- 035 / 2682 Dean: STRONG -> QUIET. Off-building overview box covers a loading canopy, not HVAC.
+- 045 / 2697 International: REVIEW -> QUIET. Weak compact rescue box is one of many residential-
+  style perimeter condensers.
+- 054 / 777 Seahawk: QUIET -> REVIEW. One credible approximately 26 ft on-building packaged AHU.
+- 094 / 2856 Crusader: REVIEW -> QUIET. All rescue boxes are 62-101 ft from a 6,417 ft2 building
+  and cover pallets/debris in the storage yard.
+- 118 / 1243 Bayne: STRONG -> QUIET. Weak off-building package box covers emergency/VRF equipment.
+- 152 / Hobby Lobby: STRONG -> REVIEW. Semi-trailer package evidence is rejected; the compact
+  rooftop tower label remains visible but is confidence-capped at REVIEW.
+- 193 / NAS Oceana - NEXCOM HQ: QUIET -> REVIEW. The verifier still retains no HVAC class, but the
+  39,430 ft2 military/federal site has one normal Stage-1 proposal and is labeled as an unverified
+  strategic-site review rather than asserted equipment.
+- 212 / 477 Viking: STRONG -> STRONG. Two large AHUs and remote condensing evidence remain protected.
+- 235 / 484 Viking: QUIET -> REVIEW. Two seam-cut package representatives are independently
+  corroborated by strong non-seam observations of the same two machines.
+- 247 / 189 Rosemont: STRONG -> QUIET. Weak off-building package box covers non-HVAC yard clutter at
+  a storage facility.
+
+The subset was intentionally selected for diagnostics and is not a random sample, so its transition
+counts must not be interpreted as an estimate of territory-wide precision.
+
+NEXCOM limitation
+-----------------
+The NEXCOM source imagery supports the user's assessment: rectangular heat-rejection sections sit
+beside the mechanical penthouse and connect to an obvious rooftop piping network. The current frozen
+detector produced one Stage-1 proposal in the parcel view but no retained tower, chiller, or package
+box. v0.11.7 therefore solves the prospecting-routing failure for this military/federal case without
+claiming that the model recognized the equipment. General recognition of fanless or side-discharge
+heat-rejection equipment still requires new labeled examples and model training.
+
+Safety checks
+-------------
+- The new military/federal unverified-proposal route matches only NEXCOM among all 155 QUIET rows in
+  the supplied field CSV.
+- The established 117.9 ft close-overview package control remains rankable.
+- 1569 Diamond Springs remains protected by its high-certainty building/focus side-yard exception.
+- 5580 Shell, 5925 Thurston, and 1444 Diamond Springs remain protected by their stronger rescue
+  confidence or building context.
+- 1609 Diamond Springs and 5901 Thurston remain QUIET under inherited v0.11.6 controls.
+
+Automated validation
+--------------------
+Twenty deterministic tests pass. They cover frozen operating points, rescue coordinate mapping,
+cross-view and cross-property de-duplication, storage/public prescreens, inherited package and thermal
+controls, and every new diagnostic rule above.
+
+Model assets
+------------
+The four v0.11.7 model assets are byte-identical to v0.11.6:
+
+- candidate.pt: ad60ee4e6e1c158309a8f2f48a25d0fd820a3f2b322e6edfe75a57b813aef00a
+- resnet18_embedder_state_fp16.pt: 7dbdd679df66598a8d9e63f983507eb7900af9553595a3bb250ee6e4795e6ffd
+- verifier_runtime.json: 678a67988474a9603856379b10580268ee6c5ae04d34580905b0f53f20ecbd6a
+- pipeline_config.json: fb11c9e25f2e52dcec34c6b74eea21d8790867da581bca24ec2be93446099925
+
+Integration boundary
+--------------------
+The local validation exercises deterministic application logic and hash-verifies the frozen assets.
+PyTorch is not installed in this Linux workspace, so bundled model loading is validated by the
+included Windows GitHub Actions workflow before it creates the portable executable artifact.

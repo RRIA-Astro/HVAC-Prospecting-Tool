@@ -8,7 +8,7 @@ External Round-4 blind validation: 40 fresh properties; 18 target-positive; 22 c
 
 This is a prospecting filter, not an engineering survey or inventory. Cooling towers remain the weakest class. QUIET is not proof of absence.
 
-Packaging note: v0.11.6 continues to store ResNet18 weights in FP16 and loads them into the normal FP32 network at runtime. Detector weights and frozen thresholds are unchanged from v0.11.1. v0.11.6 changes prescreen, ranking, and cross-property attribution logic rather than retraining the detector.
+Packaging note: v0.11.7 continues to store ResNet18 weights in FP16 and loads them into the normal FP32 network at runtime. Detector weights and frozen thresholds are unchanged from v0.11.1. v0.11.7 changes deterministic ranking and review routing rather than retraining the detector.
 
 
 v0.11.5 field logic note:
@@ -24,3 +24,13 @@ small ambiguous Public/Semi Public parcels unless they have explicit institution
 Ranking rejects broad near-square normal thermal boxes when p<0.55 and best class<0.30. Batch scans
 also reconcile near-identical ordinary-parcel thermal detections across properties and retain the
 losing detection in the JSON audit. Campus-adjacent evidence is not cross-property reconciled.
+
+v0.11.7 field logic note:
+Normal and rescue inference remain byte-for-byte unchanged. Ranking now rejects weak singleton
+package hypotheses and off-building package boxes from wide views, with a narrow protected
+high-certainty exception. Seam-cut package evidence requires a strong non-seam same-machine
+observation and is REVIEW-only when it is the only package path. Small-site distant rescue clutter
+and weak compact rescue boxes are rejected. Compact rooftop tower labels on very large Commercial
+buildings are REVIEW-capped. A bounded military/federal near-miss route can surface an unverified
+Stage-1 proposal without asserting an HVAC class. General fanless heat-rejection recognition remains
+outside the frozen model's demonstrated capabilities.

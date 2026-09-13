@@ -11,7 +11,7 @@ AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/Ima
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.11.6"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.11.7"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -429,7 +429,7 @@ from datetime import datetime
 from PIL import Image,ImageTk,ImageDraw
 import numpy as np
 
-APP_VERSION='0.11.6'
+APP_VERSION='0.11.7'
 CANDIDATE_THRESHOLD=0.07
 TOWER_CHILLER_THRESHOLD=0.35
 LARGE_PACKAGED_THRESHOLD=0.45
@@ -461,6 +461,8 @@ THERMAL_STRONG_SIZED_P=0.60
 THERMAL_STRONG_SIZED_BEST=0.30
 THERMAL_STRONG_MIN_FT=22.0
 PACKAGE_MAX_BUILDING_DISTANCE_FT=45.0
+PACKAGE_WIDE_VIEW_MAX_BUILDING_DISTANCE_FT=5.0
+SMALL_SITE_RESCUE_MAX_BUILDING_DISTANCE_FT=45.0
 DISPLAY={'COOLING_TOWER':'Tower','AIR_COOLED_CHILLER':'Chiller','LARGE_PACKAGED_HVAC':'Large pkg'}
 PARCEL_BUFFER_FT=30.0
 
@@ -867,15 +869,46 @@ class LocalCV:
             return out
         finally:shutil.rmtree(tiles,ignore_errors=True)
 
-def package_rankable(z,d):
+def package_same_machine(a,b):
+    """Conservative same-machine test used only to corroborate a seam-cut package box."""
+    if a.get('type')!='LARGE_PACKAGED_HVAC' or b.get('type')!='LARGE_PACKAGED_HVAC':return False
+    if a.get('image') and a.get('image')==b.get('image') and a.get('box') and b.get('box'):
+        if box_iou(a['box'],b['box'])>=.12 or box_overlap_min(a['box'],b['box'])>=.30:return True
+    if None in (a.get('lon'),a.get('lat'),b.get('lon'),b.get('lat')):return False
+    dist=miles(a['lon'],a['lat'],b['lon'],b['lat'])*5280
+    maxdim=max(float(a.get('long_ft') or 0),float(b.get('long_ft') or 0),1.0)
+    return dist<=max(6.0,min(12.0,maxdim*.20))
+
+def package_seam_corroborated(cv,d):
+    """A seam box may rank for REVIEW only when a strong non-seam view sees the same machine."""
+    if not d.get('internal_tile_edge'):return False
+    for other in cv.get('raw_detections',[]):
+        if (other.get('type')=='LARGE_PACKAGED_HVAC' and not other.get('internal_tile_edge') and
+            float(other.get('p') or 0)>=.80 and float(other.get('best_class_prob') or 0)>=.65 and
+            package_same_machine(d,other)):
+            return True
+    return False
+
+def package_rankable(z,d,cv=None):
     if d.get('type')!='LARGE_PACKAGED_HVAC' or d.get('attribution_scope')=='CAMPUS ADJACENT':return False
     if z.get('storage_like') or repetitive_storage_like(z):return False
     # A detection cut by an internal inference-tile seam is too fragile to drive a packaged-only prospect.
-    if d.get('internal_tile_edge'):return False
+    # v0.11.7 permits only a strong, independent non-seam observation of the same machine to
+    # rescue it, and triage keeps an all-seam package case at REVIEW.
+    if d.get('internal_tile_edge') and not (cv and package_seam_corroborated(cv,d)):return False
+    p=float(d.get('p') or 0);best=float(d.get('best_class_prob') or 0)
+    # Weak singleton package hypotheses repeatedly proved to be generators, dumpsters or vehicles.
+    if p<.55 and best<.35:return False
     # Trucks/trailers and dock clutter are recurring large-package false positives. Real rooftop/package equipment
     # is normally on or close to a mapped building. Packaged equipment is secondary to tower/chiller recall, so
     # we deliberately require stronger building context here.
     bd=d.get('building_distance_ft')
+    if (bd is not None and bd>PACKAGE_WIDE_VIEW_MAX_BUILDING_DISTANCE_FT and
+        d.get('view_kind') in ('overview','parcel_tile')):
+        # Preserve the established very-high-certainty 117.9 ft package control when its
+        # overview box falls just outside an imperfect footprint.
+        close_high_certainty=(bd<=15 and p>=.95 and best>=.75)
+        if not close_high_certainty:return False
     if bd is not None and bd>PACKAGE_MAX_BUILDING_DISTANCE_FT:
         # Permit a narrow high-certainty side-yard exception. 1569 Diamond Springs is the
         # motivating fixed four-fan unit; trailers and trucks do not meet these verifier gates.
@@ -889,7 +922,7 @@ def package_rankable(z,d):
 
 def packaged_bands(cv,z):
     allpkg=[d for d in cv.get('detections',[]) if d.get('type')=='LARGE_PACKAGED_HVAC' and d.get('attribution_scope')!='CAMPUS ADJACENT']
-    ds=[d for d in allpkg if package_rankable(z,d)]
+    ds=[d for d in allpkg if package_rankable(z,d,cv)]
     very_large=sum((d.get('long_ft') or 0)>=36 for d in ds)
     largeish=sum((d.get('long_ft') or 0)>=28 for d in ds)
     mid=sum((d.get('long_ft') or 0)>=18 for d in ds)
@@ -903,6 +936,12 @@ def thermal_detection_rankable(z,d):
         if best<.22:return False
         bd=d.get('building_distance_ft')
         if bd is not None and bd>THERMAL_RESCUE_MAX_BUILDING_DISTANCE_FT:return False
+        # On a very small site, far-yard rescue boxes are much more likely to be stored material
+        # than serving HVAC.  This removes the 2856 Crusader pallet/debris cluster.
+        if ((z.get('largest') or 0)<8000 and bd is not None and
+            bd>SMALL_SITE_RESCUE_MAX_BUILDING_DISTANCE_FT):return False
+        # A single weak, compact rescue box among repeated residential condensers is not enough.
+        if (d.get('review_only') and (d.get('long_ft') or 0)<22 and p<.70 and best<.40):return False
     # Keep high-confidence seam detections such as 5649 Bayside, while removing the weak
     # overview seam lookalike at 1400 Air Rail.
     if d.get('view_kind')=='overview' and d.get('internal_tile_edge') and p<.60 and best<.25:return False
@@ -912,6 +951,21 @@ def thermal_detection_rankable(z,d):
     # stronger 5580 Shell review and every established side-yard rescue case.
     if not d.get('rescue') and (d.get('long_ft') or 0)>=32 and (d.get('short_ft') or 0)>=28 and p<.55 and best<.30:return False
     return True
+
+def commercial_rooftop_tower_review_only(z,d):
+    """Keep a compact big-box rooftop tower lookalike visible, but never call it STRONG alone."""
+    land=str(z.get('land') or '').upper();bd=d.get('building_distance_ft')
+    return (d.get('type')=='COOLING_TOWER' and not d.get('rescue') and 'COMMERCIAL' in land and
+            (z.get('largest') or 0)>=100000 and d.get('view_kind') in ('building','building_focus') and
+            (bd is None or bd<=1.0) and (d.get('long_ft') or 0)<30)
+
+def strategic_unverified_review(z,cv):
+    """Surface a bounded military/federal near miss without claiming verified HVAC evidence."""
+    ctx=property_context(z);largest=z.get('largest') or 0
+    identity=any(k in ctx for k in ('MILITARY','NAVAL','NAVY','NAS ','NEXCOM','AIR FORCE','ARMY',
+                                     'MARINE CORPS','COAST GUARD','DEPARTMENT OF DEFENSE',' DOD ',
+                                     'FEDERAL'))
+    return identity and largest>=30000 and int(cv.get('stage1_proposals') or 0)>=1
 
 def thermal_evidence(cv,z):
     alltc=[d for d in cv.get('detections',[]) if d.get('type') in ('COOLING_TOWER','AIR_COOLED_CHILLER')]
@@ -923,7 +977,7 @@ def thermal_evidence(cv,z):
         p=float(d.get('p') or 0);best=float(d.get('best_class_prob') or 0);long=float(d.get('long_ft') or 0)
         high_conf=(p>=THERMAL_STRONG_HIGH_P and best>=THERMAL_STRONG_HIGH_BEST)
         sized_conf=(long>=THERMAL_STRONG_MIN_FT and p>=THERMAL_STRONG_SIZED_P and best>=THERMAL_STRONG_SIZED_BEST)
-        if high_conf or sized_conf:strong.append(d)
+        if (high_conf or sized_conf) and not commercial_rooftop_tower_review_only(z,d):strong.append(d)
     return tc,direct,strong
 
 def triage_status(z,cv):
@@ -933,8 +987,16 @@ def triage_status(z,cv):
     # are still intentionally surfaced, but as REVIEW rather than STRONG.
     if tc:return 'REVIEW'
     ds,very_large,largeish,mid=packaged_bands(cv,z)
-    if very_large>=1 or largeish>=2 or mid>=10:return 'STRONG'
-    if largeish>=1 or mid>=5 or (mid>=3 and max([d.get('long_ft',0) for d in ds]+[0])>=23):return 'REVIEW'
+    package_strong=very_large>=1 or largeish>=2 or mid>=10
+    # Seam-corroborated evidence is useful enough to investigate, but not to label STRONG by itself.
+    if package_strong and ds and all(d.get('internal_tile_edge') for d in ds):return 'REVIEW'
+    if package_strong:return 'STRONG'
+    single_credible=any((d.get('long_ft') or 0)>=25 and float(d.get('p') or 0)>=.65 and
+                        float(d.get('best_class_prob') or 0)>=.55 and
+                        (d.get('building_distance_ft') is None or d.get('building_distance_ft')<=1.0) and
+                        d.get('view_kind') in ('building','building_focus') for d in ds)
+    if largeish>=1 or mid>=5 or (mid>=3 and max([d.get('long_ft',0) for d in ds]+[0])>=23) or single_credible:return 'REVIEW'
+    if strategic_unverified_review(z,cv):return 'REVIEW'
     return 'QUIET'
 
 def hit_text(cv,z):
@@ -945,6 +1007,8 @@ def hit_text(cv,z):
         rev=sum(d.get('type')==typ and d.get('review_only') for d in tc)
         if reg:q.append(f"{label} evidence {reg}")
         if rev:q.append(f"{label} review {rev}")
+    rooftop_ambiguous=sum(commercial_rooftop_tower_review_only(z,d) for d in tc)
+    if rooftop_ambiguous:q.append(f"Compact rooftop tower ambiguity {rooftop_ambiguous}")
     alltc=[d for d in cv.get('detections',[]) if d.get('type') in ('COOLING_TOWER','AIR_COOLED_CHILLER')]
     rejected=max(0,len(alltc)-len(tc))
     if rejected:q.append(f"Thermal context-rejected {rejected}")
@@ -952,6 +1016,8 @@ def hit_text(cv,z):
     allpkg=[d for d in cv.get('detections',[]) if d.get('type')=='LARGE_PACKAGED_HVAC' and d.get('attribution_scope')!='CAMPUS ADJACENT']
     if ds:
         mx=max(d.get('long_ft',0) for d in ds);q.append(f"Pkg evidence {len(ds)} (max ~{mx:.0f} ft)")
+        seam_review=sum(bool(d.get('internal_tile_edge')) for d in ds)
+        if seam_review:q.append(f"Pkg seam-corroborated {seam_review}")
     suppressed=max(0,len(allpkg)-len(ds))
     if suppressed:q.append(f"Pkg context-rejected {suppressed}")
     adj=sum(d.get('attribution_scope')=='CAMPUS ADJACENT' for d in cv.get('detections',[]))
@@ -960,6 +1026,8 @@ def hit_text(cv,z):
     if rescue_review:q.append(f"Thermal rescue review {rescue_review}")
     if cv.get('attribution_rejected'):q.append(f"Outside parcel {cv['attribution_rejected']}")
     if cv.get('cross_property_rejected'):q.append(f"Neighbor-assigned {cv['cross_property_rejected']}")
+    if strategic_unverified_review(z,cv) and not tc and not ds:
+        q.append(f"Strategic-site unverified proposal {int(cv.get('stage1_proposals') or 0)}")
     return ' | '.join(q)
 
 def opportunity_score(z,cv,status=None):
@@ -969,7 +1037,7 @@ def opportunity_score(z,cv,status=None):
     if strong:
         if any(d.get('type')=='COOLING_TOWER' for d in strong):base=96
         else:base=94
-    elif tc:base=78 if any(d.get('review_only') for d in tc) else 82
+    elif tc:base=78 if any(d.get('review_only') or commercial_rooftop_tower_review_only(z,d) for d in tc) else 82
     elif status=='STRONG':base=86
     elif status=='REVIEW':base=70
     else:return 0
@@ -1067,7 +1135,7 @@ class DetailWindow:
 class App:
     def __init__(self,r):
         self.r=r;self.rows=[];self.cv=None;self.scan_running=False;self.last_scan_root=None;self.review_csv_path=None
-        r.title('HVAC Territory Discovery v0.11.6 — Precision Ownership');r.geometry('1820x930')
+        r.title('HVAC Territory Discovery v0.11.7 — Diagnostic Calibration');r.geometry('1820x930')
         t=ttk.Frame(r,padding=10);t.pack(fill='x')
         ttk.Label(t,text='Virginia Beach center:').grid(row=0,column=0);self.q=tk.StringVar(value='717 General Booth Blvd');ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)
         ttk.Label(t,text='Radius mi:').grid(row=0,column=2);self.rad=tk.StringVar(value='1.0');ttk.Entry(t,textvariable=self.rad,width=6).grid(row=0,column=3)
@@ -1075,7 +1143,7 @@ class App:
         self.discb=ttk.Button(t,text='1. Discover + Prescreen',command=self.start);self.discb.grid(row=0,column=6,padx=8)
         self.scanb=ttk.Button(t,text='2. Analyze Prescreened',command=self.analyze_prescreened);self.scanb.grid(row=0,column=7,padx=5)
         ttk.Button(t,text='Open Existing Scan',command=self.load_existing_scan).grid(row=0,column=8,padx=8)
-        self.st=tk.StringVar(value='v0.11.6 precision ownership — frozen v0.0.12 CV.');ttk.Label(r,textvariable=self.st).pack(fill='x',padx=10)
+        self.st=tk.StringVar(value='v0.11.7 diagnostic calibration — frozen v0.0.12 CV.');ttk.Label(r,textvariable=self.st).pack(fill='x',padx=10)
         cols=('rank','facility','address','cv','opp','evidence','maxp','review','note','largest','bldgs','mi','land','tier','pre','prewhy','gis','source')
         heads={'rank':'#','facility':'FACILITY','address':'ADDRESS','cv':'TRIAGE','opp':'OPP','evidence':'MECHANICAL EVIDENCE','maxp':'MAX P','review':'USER','note':'NOTE','largest':'LARGEST','bldgs':'BLDGS','mi':'MI','land':'LAND USE','tier':'GIS TIER','pre':'PRE','prewhy':'PRESCREEN REASON','gis':'GIS','source':'FOOTPRINT'}
         widths=(42,205,170,72,52,245,55,72,150,82,48,48,145,65,42,170,48,85)
@@ -1150,14 +1218,14 @@ class App:
                 record={'z':z,'cv':cv,'folder':folder,'scan_index':n};records.append(record);rows.append(self._finalize_scan_record(record))
                 self.write_csv(root,rows);self.r.after(0,self.refresh)
             reassigned=reconcile_cross_property_detections(records);rows=[self._finalize_scan_record(r) for r in records];self.write_csv(root,rows);self.r.after(0,self.refresh)
-            strong=sum(r['cv_status']=='STRONG' for r in rows);review=sum(r['cv_status']=='REVIEW' for r in rows);surf=strong+review;quiet=sum(r['cv_status']=='QUIET' for r in rows);(root/'SCAN_SUMMARY.txt').write_text(f'HVAC Territory Discovery v0.11.6\nFrozen detector pipeline v0.0.12\nPrimary thresholds 0.07 / 0.35 / 0.45\nParcel buffer: {PARCEL_BUFFER_FT:.0f} ft\n\nProperties analyzed: {len(rows)}\nSTRONG: {strong}\nREVIEW: {review}\nSurfaced total: {surf}\nQUIET: {quiet}\nNeighbor-assigned duplicate evidence: {reassigned}\n\nMechanical evidence is geographically de-duplicated across views and properties. Outside-parcel and context-rejected detections do not rank the property. v0.11.6 adds a conservative small-public-parcel prescreen, rejects broad weak thermal debris shapes, and assigns duplicated boundary equipment to the best-supported parcel while retaining raw audit evidence.\n',encoding='utf-8')
+            strong=sum(r['cv_status']=='STRONG' for r in rows);review=sum(r['cv_status']=='REVIEW' for r in rows);surf=strong+review;quiet=sum(r['cv_status']=='QUIET' for r in rows);(root/'SCAN_SUMMARY.txt').write_text(f'HVAC Territory Discovery v0.11.7\nFrozen detector pipeline v0.0.12\nPrimary thresholds 0.07 / 0.35 / 0.45\nParcel buffer: {PARCEL_BUFFER_FT:.0f} ft\n\nProperties analyzed: {len(rows)}\nSTRONG: {strong}\nREVIEW: {review}\nSurfaced total: {surf}\nQUIET: {quiet}\nNeighbor-assigned duplicate evidence: {reassigned}\n\nMechanical evidence is geographically de-duplicated across views and properties. Outside-parcel and context-rejected detections do not rank the property. v0.11.7 calibrates package context, rescue distance, compact rooftop-tower ambiguity, and bounded strategic-site near misses while retaining raw audit evidence.\n',encoding='utf-8')
             self.r.after(0,lambda:self.st.set(f'Scan complete: {strong} STRONG + {review} REVIEW / {len(rows)} | {root}'));self.r.after(0,lambda:messagebox.showinfo('Scan Complete',f'Analyzed {len(rows)} properties.\nSTRONG {strong} | REVIEW {review} | QUIET {quiet}.\n\nResults:\n{root}'))
         except Exception as e:
             detail=traceback.format_exc()
             try:
                 diag=Path.home()/'Downloads'/'HVAC_CV_ERROR.txt'
                 diag.write_text(
-                    'HVAC Territory Discovery v0.11.6\n\n'+detail+
+                    'HVAC Territory Discovery v0.11.7\n\n'+detail+
                     '\nExecutable: '+str(sys.executable)+
                     '\n_MEIPASS: '+str(getattr(sys,'_MEIPASS',None))+
                     '\nCandidate asset: '+str(resource_path('models','candidate.pt'))+

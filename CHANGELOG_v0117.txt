@@ -1,0 +1,55 @@
+HVAC Territory Discovery v0.11.7
+================================
+
+Detector model: unchanged frozen v0.0.12
+Primary thresholds: unchanged 0.07 / 0.35 / 0.45
+Shifted-rescue Stage-1 floor: unchanged 0.015
+Zoomed-perimeter Stage-1 floor: unchanged 0.008
+
+1. Packaged-equipment precision
+- Context-rejects a package hypothesis when both total probability is below 0.55 and best package
+  probability is below 0.35. This removes weak generator/dumpster/vehicle promotions such as 1243
+  Bayne and 189 Rosemont.
+- Context-rejects package boxes from overview or parcel-tile views when they are more than 5 ft from
+  a mapped building. A previously protected very-high-certainty exception remains for a box within
+  15 ft with p>=0.95 and best class>=0.75. This removes the loading canopy at 2682 Dean and the
+  semi-trailer beside Hobby Lobby without breaking the established 117.9 ft package control.
+- A seam-cut package can rank only when the raw audit contains a non-seam observation of the same
+  machine with p>=0.80 and best class>=0.65. If all ranked package representatives are seam-cut,
+  they can create REVIEW but not STRONG. This surfaces the two real large units at 484 Viking as
+  REVIEW instead of discarding both.
+- One on-building, non-rescue package at least 25 ft with p>=0.65 and best class>=0.55 can now create
+  REVIEW. This narrowly surfaces the 26 ft packaged AHU at 777 Seahawk.
+
+2. Thermal-rescue precision
+- On a property whose largest building is below 8,000 ft2, rescue-only thermal evidence more than
+  45 ft from a mapped building is context-rejected. This removes the pallet/debris cluster at 2856
+  Crusader.
+- A compact review-only rescue box below 22 ft is rejected only when p<0.70 and best class<0.40.
+  This removes the residential-style perimeter condenser at 2697 International while retaining the
+  established 5580 Shell, 5925 Thurston, and 1444 Diamond Springs rescue controls.
+
+3. Confidence-honest review routing
+- A compact non-rescue rooftop cooling-tower label below 30 ft on a Commercial building of at least
+  100,000 ft2 remains visible but cannot create STRONG by itself. Hobby Lobby therefore moves from
+  STRONG to REVIEW; the current frozen classifier cannot safely distinguish that four-fan RTU from
+  every legitimate compact rooftop heat-rejection unit.
+- A military/federal property with a building of at least 30,000 ft2 and at least one unverified
+  normal Stage-1 proposal can receive REVIEW after all verified equipment paths are empty. The row
+  explicitly reports "Strategic-site unverified proposal" and does not claim a tower or chiller.
+  This surfaces NAS Oceana - NEXCOM HQ while honestly preserving the model's fanless-equipment blind
+  spot.
+
+4. Diagnostic replay
+- 509 Viking and 477 Viking remain STRONG.
+- 2682 Dean, 2697 International, 2856 Crusader, 1243 Bayne, and 189 Rosemont move to QUIET.
+- 777 Seahawk, NAS Oceana - NEXCOM HQ, and 484 Viking move to REVIEW.
+- Hobby Lobby moves from STRONG to REVIEW.
+
+5. Output and build
+- Application, source package, Windows workflow, artifact names, documentation, and tests advance
+  to v0.11.7.
+- Twenty deterministic tests cover the new diagnostic cases and all inherited protected controls.
+
+v0.11.7 is a logic-only calibration build. Detector/verifier bytes, primary thresholds, rescue
+thresholds, image acquisition, parcel attribution, and the v0.11.6 prescreen are unchanged.
