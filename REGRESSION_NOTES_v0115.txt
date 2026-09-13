@@ -1,0 +1,87 @@
+HVAC Territory Discovery v0.11.5 — Regression Notes
+====================================================
+
+Input field run
+---------------
+HVAC_Prospecting_Scan_20260912_172837 (135 properties), produced by v0.11.4.
+
+Direct frozen-model inference
+-----------------------------
+The unchanged bundled Stage-1 and Stage-2 models were loaded under CPU PyTorch and run on saved
+source imagery. The final zoom configuration is a 3 x 3 grid of 512-pixel crops enlarged to 1024,
+Stage-1 floor 0.008, total thermal floor 0.55, and best-class floor 0.50.
+
+- 5925 Thurston / F02_138944sf.jpg:
+  COOLING_TOWER, p=0.7964948, best=0.6975557, Stage-1=0.0081869, 14.47 x 13.92 ft.
+  The mapped box (1513.78, 910.90)-(1555.81, 951.31) is on the actual side-yard fan bank.
+  Outcome on a fresh scan: REVIEW, as intended.
+
+- 1444 Diamond Springs / B01_10018sf.jpg:
+  COOLING_TOWER, p=0.6444423, best=0.5937028, Stage-1=0.0117078, 9.80 x 8.46 ft.
+  Outcome on a fresh scan: REVIEW, as intended.
+
+- 5770 Thurston / B01_50914sf.jpg:
+  No Stage-1 proposals at the zoomed operating point.
+
+- 2377 Ferry / B01_29267sf.jpg:
+  The known scrap lookalike remains available as raw audit evidence but is approximately 108.32 ft
+  from the nearest mapped building, so the 75-ft rescue context rule prevents it from ranking.
+
+A 640-pixel prototype was rejected: it missed the actual 5925 fan bank and retained a lower-quality
+rooftop box. The 512-pixel scale catches the intended object, catches 1444, and removes the tested
+5925 distraction at the final best-class floor; building context handles 2377.
+
+Broad zoom-path sweep
+---------------------
+All 70 saved properties that would reach the v0.11.5 fallback were rerun with current parcel polygons
+and building footprints. Ten retained any raw zoom evidence and eight retained rankable evidence.
+Parcel attribution removed neighboring/image-edge detections, while the 75-ft rescue building rule
+removed 1236 Baker and 2377 Ferry. Rankable REVIEW evidence was produced at 5901 Thurston,
+5925 Thurston, 1569 Diamond Springs, 1431 Baker, 1700 Shelton, 5729 Bayside, 5580 Shell, and
+1444 Diamond Springs. 1569 already ranks STRONG from its fixed packaged-unit evidence.
+
+Saved-result ranking replay
+---------------------------
+All 135 saved cv_result.json files were replayed through v0.11.5 ranking logic without changing
+their detections. Result: 16 STRONG, 6 REVIEW, 113 QUIET. Exactly four statuses changed:
+
+- 1569 Diamond Springs: QUIET -> STRONG.
+- 1400 Air Rail: REVIEW -> QUIET.
+- 5770 Thurston: REVIEW -> QUIET.
+- 2377 Ferry: REVIEW -> QUIET.
+
+Every one of the 15 original STRONG properties remains surfaced. The morphology filter requires a
+fresh discovery result because saved scan CSVs do not contain building rings; this is expected.
+Using current footprints, 1409 Diamond Springs is filtered as a repetitive storage-like complex
+(12 buildings, all 12 above the elongation threshold), while 1444 Diamond Springs is not filtered
+and remains rescue-eligible under its protected Public/Semi Public context.
+
+Automated regression suite
+--------------------------
+Ten tests pass. They cover:
+
+- Frozen primary thresholds and v0.11.5 version.
+- 5925 target coverage within the 512-pixel grid.
+- Zoomed box mapping back to full-image coordinates.
+- 1444 small Public/Semi Public rescue eligibility.
+- Two-view selection for the 5925-size case.
+- Known packaged cases: 1569, 1301, 5792, 1409, and 5332.
+- Known thermal cases: 1400, 2377, 5770, 5700, and 5649.
+- Context-rejected evidence remains auditable but does not surface a property.
+- Cross-class fusion for the 965 Baker pattern.
+- Storage morphology filtering with military/public-campus protection.
+
+Integration boundary
+--------------------
+The Linux validation loads and executes the same bundled model assets and inference methods used by
+the application. The Windows executable itself is produced by the included GitHub Actions workflow;
+that platform packaging job cannot be executed inside this Linux workspace.
+
+Model asset SHA-256 comparison
+------------------------------
+Each v0.11.5 asset is byte-identical to the supplied v0.11.4 source:
+
+- candidate.pt: ad60ee4e6e1c158309a8f2f48a25d0fd820a3f2b322e6edfe75a57b813aef00a
+- resnet18_embedder_state_fp16.pt: 7dbdd679df66598a8d9e63f983507eb7900af9553595a3bb250ee6e4795e6ffd
+- verifier_runtime.json: 678a67988474a9603856379b10580268ee6c5ae04d34580905b0f53f20ecbd6a
+- pipeline_config.json: fb11c9e25f2e52dcec34c6b74eea21d8790867da581bca24ec2be93446099925

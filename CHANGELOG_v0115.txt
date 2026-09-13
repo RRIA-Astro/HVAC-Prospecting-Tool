@@ -1,0 +1,46 @@
+HVAC Territory Discovery v0.11.5
+================================
+
+Detector model: unchanged frozen v0.0.12
+Primary thresholds: unchanged 0.07 / 0.35 / 0.45
+Shifted-rescue Stage-1 floor: unchanged 0.015
+Zoomed-perimeter Stage-1 floor: 0.008 (new rescue path only)
+
+1. Zoomed perimeter recall
+- Adds a 3 x 3 grid of 512-pixel source crops, enlarged to 1024 pixels for Stage-1 inference.
+- Runs only after an eligible property's normal scan has no thermal hypothesis and shifted rescue
+  has no rankable thermal evidence.
+- Keeps only 7-130 ft thermal proposals with p>=0.55 and best thermal class>=0.50.
+- All zoomed evidence is REVIEW-only.
+- Direct frozen-model inference now catches the probable side-yard unit at 5925 Thurston and a
+  rooftop target at 1444 Diamond Springs.
+
+2. Broader priority rescue routing
+- Lowers the rescue size floor from 20,000 to 2,500 ft2 for eligible priority properties.
+- Adds Public/Semi Public to priority rescue routing.
+- Excludes residential, restaurant, retail, shopping, and storage contexts.
+- Uses up to two focus views at >=75,000 ft2 and one below that size.
+
+3. Ranking/context cleanup
+- Allows a high-certainty fixed side-yard packaged unit out to 70 ft from a mapped building.
+- Rejects weak overview seam thermal boxes, implausibly broad overview boxes, distant rescue thermal
+  detections, and wide lower-confidence overview packaged boxes.
+- Retains raw detections and reports context-rejected counts for audit.
+- Adds rotation-independent footprint elongation and a protected storage-like-complex filter.
+
+4. Cross-class de-duplication
+- Merges tower/chiller labels from the same image when boxes partially overlap or one nests in the
+  other, preventing the 965 Baker machine from counting twice.
+
+5. Diagnostics
+- Adds perimeter_rescue_proposals, perimeter_rescue_tiles, perimeter_rescue_verified, and
+  perimeter_rescue_evidence to JSON/CSV output.
+- Uses cyan perimeter-rescue overlays, distinct from yellow shifted-rescue overlays.
+- Fixes delayed Tk error reporting for aerial/campus-image download failures.
+
+6. Build and validation
+- Windows workflow/artifact names advance to v0115 and bundle this changelog plus regression notes.
+- Adds ten deterministic logic tests and a real frozen-model validation record.
+
+The detector and verifier assets are unchanged. v0.11.5 is a targeted field-logic build, not a
+retrained model.

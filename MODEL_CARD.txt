@@ -8,10 +8,12 @@ External Round-4 blind validation: 40 fresh properties; 18 target-positive; 22 c
 
 This is a prospecting filter, not an engineering survey or inventory. Cooling towers remain the weakest class. QUIET is not proof of absence.
 
-Packaging note: v0.11.4 continues to store ResNet18 weights in FP16 and loads them into the normal FP32 network at runtime. Detector weights and frozen thresholds are unchanged from v0.11.1. v0.11.4 keeps the detector weights frozen and adds a recall-only deep-rescue proposal path plus thermal triage refinement rather than retraining the detector.
+Packaging note: v0.11.5 continues to store ResNet18 weights in FP16 and loads them into the normal FP32 network at runtime. Detector weights and frozen thresholds are unchanged from v0.11.1. v0.11.5 changes bounded rescue and ranking logic rather than retraining the detector.
 
 
-v0.11.4 field logic note:
-The underlying v0.0.12 Stage-1 and verifier weights remain unchanged. Primary thresholds remain 0.07 / 0.35 / 0.45. v0.11.4 adds a separate deep thermal rescue only when a high-value property has no retained tower/chiller evidence. Rescue uses shifted overlap tiles and a Stage-1 proposal floor of 0.015. Proposals below the frozen 0.07 Stage-1 operating point are always REVIEW-only, even if the Stage-2 visual verifier likes them. The Stage-2 numeric candidate-confidence feature is floored at 0.07 only for this REVIEW rescue scoring. Normal detections are unchanged.
+v0.11.5 field logic note:
+The underlying v0.0.12 Stage-1 and verifier weights remain unchanged. Primary thresholds remain 0.07 / 0.35 / 0.45. The existing shifted rescue retains its 0.015 Stage-1 floor. v0.11.5 adds a final zoomed perimeter rescue only for eligible priority properties when normal scanning has no tower/chiller hypothesis and shifted rescue has no rankable thermal evidence. It enlarges a bounded 3 x 3 grid of 512-pixel crops to 1024 pixels and uses a Stage-1 floor of 0.008. Retained zoomed evidence requires total thermal probability >=0.55 and best thermal-class probability >=0.50.
 
-Thermal STRONG triage is also confidence-aware: compact high-confidence chillers can be STRONG, while physically large but low-confidence tower/chiller lookalikes remain REVIEW. This is ranking logic only; it does not alter model weights or normal detector thresholds.
+All low-Stage-1 rescue detections are REVIEW-only, even when the Stage-2 verifier likes them. The Stage-2 numeric candidate-confidence feature is floored at 0.07 only for rescue scoring. Normal detections are unchanged.
+
+Thermal STRONG triage remains confidence-aware. v0.11.5 additionally context-rejects weak overview seams, distant rescue evidence, broad low-confidence overview boxes, and storage-like morphology while preserving raw detections for audit. This is ranking logic only; it does not alter model weights or normal detector thresholds.
