@@ -11,7 +11,7 @@ AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/Ima
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.11.5"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.11.6"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
     if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
@@ -213,8 +213,26 @@ def repetitive_storage_like(p):
     elongated=sum(building_elongation(b)>=2.4 for b in bs)/max(1,len(bs))
     return small>=0.85 and elongated>=0.65
 
+def ambiguous_small_public_site(p):
+    """Reject small residential-scale parcels hidden behind a generic public-use code.
+
+    Virginia Beach parcel data can label whole residential common-interest areas Public/Semi
+    Public.  A nearby road/court name may then be attached as the facility name.  Preserve small
+    sites only when the name, OSM kind, or building code identifies a real institutional or utility
+    use; otherwise there is not enough nonresidential evidence to spend an imagery scan on them.
+    """
+    land=str(p.get("land") or "").upper();largest=p.get("largest");count=p.get("count",0) or 0
+    if "PUBLIC/SEMI PUBLIC" not in land or largest is None or largest>=8000 or count>2:return False
+    identity=" ".join(str(x or "") for x in (p.get("facility"),p.get("facility_kind")," ".join(p.get("fcodes",[])))).upper()
+    identified=any(k in identity for k in (
+        "HOSP","MEDICAL","CLINIC","UNIVERS","COLLEGE","SCHOOL","ACADEMY","DAYCARE",
+        "CHURCH","RELIG","WORSHIP","MOSQUE","SYNAGOG","GOVERN","MUNICIPAL","CITY OF",
+        "COUNTY","FIRE","POLICE","LIBRARY","UTILITY","PUMP","SUBSTATION","WATER TREATMENT",
+        "WASTEWATER","MILITARY"))
+    return not identified
+
 def prescreen(p,mn):
-    """Cheap non-vision gate with storage morphology cleanup and campus protection."""
+    """Cheap precision-first non-vision gate with campus protection."""
     ctx=property_context(p);largest=p.get("largest");avg=p.get("avg");count=p.get("count",0)
     residential=any(k in ctx for k in ("SINGLE FAMILY","DUPLEX","MULTI FAMILY","MULTIFAMILY","APART","CONDO","TOWN HOUSE","TOWNHOUSE","TOWNHOME"))
     poor_use=any(k in ctx for k in ("RESTAUR","RETAIL","SHOPPING","STORE","PUBLIC STORAGE","SELF STORAGE","MINI STORAGE"))
@@ -224,6 +242,7 @@ def prescreen(p,mn):
     if residential:return False,"RESIDENTIAL / TOWNHOME"
     if repetitive_storage_like(p):return False,"REPETITIVE STORAGE-LIKE COMPLEX"
     if largest is None:return False,"NO FOOTPRINT"
+    if ambiguous_small_public_site(p):return False,"AMBIGUOUS SMALL PUBLIC PARCEL"
     if largest>=max(mn,20000):return True,f"SIZE: largest {largest:,} ft2"
     if strong_priority and largest>=2500:return True,f"PRIORITY: {largest:,} ft2"
     if not poor_use and largest>=10000:return True,f"COMMERCIAL SIZE: {largest:,} ft2"
@@ -410,7 +429,7 @@ from datetime import datetime
 from PIL import Image,ImageTk,ImageDraw
 import numpy as np
 
-APP_VERSION='0.11.5'
+APP_VERSION='0.11.6'
 CANDIDATE_THRESHOLD=0.07
 TOWER_CHILLER_THRESHOLD=0.35
 LARGE_PACKAGED_THRESHOLD=0.45
@@ -842,6 +861,7 @@ class LocalCV:
                  'thermal_rescue_evidence':sum(bool(d.get('rescue')) for d in uniq),
                  'thermal_review_only_evidence':sum(bool(d.get('rescue') and d.get('review_only')) for d in uniq),
                  'raw_retained_evidence':len(raw),'retained_evidence':len(uniq),'attribution_rejected':len(outside),
+                 'cross_property_rejected':0,'cross_property_rejected_detections':[],
                  'views':viewrows,'detections':uniq,'raw_detections':raw,'outside_parcel_detections':outside}
             (site_dir/'cv_result.json').write_text(json.dumps(out,indent=2,default=float),encoding='utf-8')
             return out
@@ -887,6 +907,10 @@ def thermal_detection_rankable(z,d):
     # overview seam lookalike at 1400 Air Rail.
     if d.get('view_kind')=='overview' and d.get('internal_tile_edge') and p<.60 and best<.25:return False
     if d.get('view_kind')=='overview' and (d.get('long_ft') or 0)>=80 and (d.get('short_ft') or 0)>=45 and p<.70:return False
+    # Broad, near-square, low-certainty normal boxes are commonly debris piles or roof clutter.
+    # This deliberately suppresses weak shapes such as 1609 Diamond Springs while retaining the
+    # stronger 5580 Shell review and every established side-yard rescue case.
+    if not d.get('rescue') and (d.get('long_ft') or 0)>=32 and (d.get('short_ft') or 0)>=28 and p<.55 and best<.30:return False
     return True
 
 def thermal_evidence(cv,z):
@@ -935,6 +959,7 @@ def hit_text(cv,z):
     rescue_review=sum(bool(d.get('rescue') and d.get('review_only')) for d in tc)
     if rescue_review:q.append(f"Thermal rescue review {rescue_review}")
     if cv.get('attribution_rejected'):q.append(f"Outside parcel {cv['attribution_rejected']}")
+    if cv.get('cross_property_rejected'):q.append(f"Neighbor-assigned {cv['cross_property_rejected']}")
     return ' | '.join(q)
 
 def opportunity_score(z,cv,status=None):
@@ -954,6 +979,78 @@ def opportunity_score(z,cv,status=None):
     base+=min(1,int((z.get('score') or 0)/60))
     return min(99,int(base))
 
+def cross_property_same_machine(a,b):
+    """Conservative cross-parcel duplicate test for one thermal machine seen twice."""
+    thermal=('COOLING_TOWER','AIR_COOLED_CHILLER')
+    if a.get('type') not in thermal or b.get('type') not in thermal:return False
+    if a.get('attribution_scope')!='PARCEL' or b.get('attribution_scope')!='PARCEL':return False
+    if None in (a.get('lon'),a.get('lat'),b.get('lon'),b.get('lat')):return False
+    dist=miles(a['lon'],a['lat'],b['lon'],b['lat'])*5280
+    maxdim=max(float(a.get('long_ft') or 0),float(b.get('long_ft') or 0),1.0)
+    return dist<=max(6.0,min(14.0,maxdim*.28))
+
+def _cross_property_owner_key(record,d):
+    """Prefer an actual containing parcel, then the closest parcel/building context."""
+    z=record['z'];pd=d.get('parcel_distance_ft');bd=d.get('building_distance_ft')
+    pd=float(pd) if pd is not None else 1e9;bd=float(bd) if bd is not None else 1e9
+    mapped_inside=bool(z.get('rings')) and pd<=.5
+    return (0 if mapped_inside else 1,pd,bd,-float(d.get('best_class_prob') or 0),
+            -float(d.get('p') or 0),int(record.get('scan_index') or 0))
+
+def refresh_cv_summary(cv):
+    """Refresh retained-evidence counters after cross-property ownership is resolved."""
+    ds=cv.get('detections',[]);hits={k:0 for k in DISPLAY};maxp=0.0
+    for d in ds:
+        if d.get('type') in hits:hits[d['type']]+=1
+        maxp=max(maxp,float(d.get('p') or 0))
+    cv['detector_status']='EVIDENCE' if ds else 'QUIET';cv['hits']=hits;cv['max_prob']=maxp
+    cv['retained_evidence']=len(ds)
+    cv['perimeter_rescue_evidence']=sum(bool(d.get('perimeter_rescue')) for d in ds)
+    cv['thermal_rescue_evidence']=sum(bool(d.get('rescue')) for d in ds)
+    cv['thermal_review_only_evidence']=sum(bool(d.get('rescue') and d.get('review_only')) for d in ds)
+
+def reconcile_cross_property_detections(records):
+    """Assign a thermal detection seen from multiple property scans to one best owner.
+
+    Campus-adjacent evidence is intentionally excluded because broad institutional parcels use a
+    different attribution contract.  Raw evidence remains in each site's audit JSON.
+    """
+    nodes=[]
+    for ri,r in enumerate(records):
+        z=r['z']
+        for di,d in enumerate(r['cv'].get('detections',[])):
+            if d.get('attribution_scope')=='PARCEL' and thermal_detection_rankable(z,d):nodes.append((ri,di,d))
+    parent=list(range(len(nodes)))
+    def find(i):
+        while parent[i]!=i:
+            parent[i]=parent[parent[i]];i=parent[i]
+        return i
+    def union(a,b):
+        a=find(a);b=find(b)
+        if a!=b:parent[b]=a
+    for i,(ri,_,a) in enumerate(nodes):
+        for j in range(i+1,len(nodes)):
+            rj,_,b=nodes[j]
+            if ri!=rj and cross_property_same_machine(a,b):union(i,j)
+    groups={}
+    for i,node in enumerate(nodes):groups.setdefault(find(i),[]).append(node)
+    removals={}
+    for members in groups.values():
+        if len({ri for ri,_,_ in members})<2:continue
+        owner=min(members,key=lambda q:_cross_property_owner_key(records[q[0]],q[2]));owner_ri=owner[0]
+        owner_z=records[owner_ri]['z']
+        for ri,di,d in members:
+            if ri==owner_ri:continue
+            audit=dict(d);audit['assigned_to_address']=owner_z.get('address','');audit['assigned_to_facility']=owner_z.get('facility','')
+            removals.setdefault(ri,{})[di]=audit
+    for ri,by_index in removals.items():
+        cv=records[ri]['cv'];cv['detections']=[d for di,d in enumerate(cv.get('detections',[])) if di not in by_index]
+        audit=cv.setdefault('cross_property_rejected_detections',[]);audit.extend(by_index[i] for i in sorted(by_index))
+        cv['cross_property_rejected']=len(audit);refresh_cv_summary(cv)
+    for r in records:
+        r['cv'].setdefault('cross_property_rejected',0);r['cv'].setdefault('cross_property_rejected_detections',[])
+    return sum(len(v) for v in removals.values())
+
 class DetailWindow:
     def __init__(self,parent,z):
         w=tk.Toplevel(parent);w.title(f"Prospect Detail — {z.get('facility') or z.get('address')}");w.geometry('900x650')
@@ -970,7 +1067,7 @@ class DetailWindow:
 class App:
     def __init__(self,r):
         self.r=r;self.rows=[];self.cv=None;self.scan_running=False;self.last_scan_root=None;self.review_csv_path=None
-        r.title('HVAC Territory Discovery v0.11.5 — Perimeter Recall');r.geometry('1820x930')
+        r.title('HVAC Territory Discovery v0.11.6 — Precision Ownership');r.geometry('1820x930')
         t=ttk.Frame(r,padding=10);t.pack(fill='x')
         ttk.Label(t,text='Virginia Beach center:').grid(row=0,column=0);self.q=tk.StringVar(value='717 General Booth Blvd');ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)
         ttk.Label(t,text='Radius mi:').grid(row=0,column=2);self.rad=tk.StringVar(value='1.0');ttk.Entry(t,textvariable=self.rad,width=6).grid(row=0,column=3)
@@ -978,7 +1075,7 @@ class App:
         self.discb=ttk.Button(t,text='1. Discover + Prescreen',command=self.start);self.discb.grid(row=0,column=6,padx=8)
         self.scanb=ttk.Button(t,text='2. Analyze Prescreened',command=self.analyze_prescreened);self.scanb.grid(row=0,column=7,padx=5)
         ttk.Button(t,text='Open Existing Scan',command=self.load_existing_scan).grid(row=0,column=8,padx=8)
-        self.st=tk.StringVar(value='v0.11.5 perimeter recall — frozen v0.0.12 CV.');ttk.Label(r,textvariable=self.st).pack(fill='x',padx=10)
+        self.st=tk.StringVar(value='v0.11.6 precision ownership — frozen v0.0.12 CV.');ttk.Label(r,textvariable=self.st).pack(fill='x',padx=10)
         cols=('rank','facility','address','cv','opp','evidence','maxp','review','note','largest','bldgs','mi','land','tier','pre','prewhy','gis','source')
         heads={'rank':'#','facility':'FACILITY','address':'ADDRESS','cv':'TRIAGE','opp':'OPP','evidence':'MECHANICAL EVIDENCE','maxp':'MAX P','review':'USER','note':'NOTE','largest':'LARGEST','bldgs':'BLDGS','mi':'MI','land':'LAND USE','tier':'GIS TIER','pre':'PRE','prewhy':'PRESCREEN REASON','gis':'GIS','source':'FOOTPRINT'}
         widths=(42,205,170,72,52,245,55,72,150,82,48,48,145,65,42,170,48,85)
@@ -998,7 +1095,7 @@ class App:
 
     def start(self):
         if self.scan_running:return
-        self.discb.config(state='disabled');self.st.set('Querying GIS and applying high-recall prescreen...');threading.Thread(target=self.work,daemon=True).start()
+        self.discb.config(state='disabled');self.st.set('Querying GIS and applying precision-weighted prescreen...');threading.Thread(target=self.work,daemon=True).start()
     def work(self):
         try:
             x,y=geocode(self.q.get().strip());self.rows,np_,nb,nj,src,errs=discover(x,y,float(self.rad.get()),float(self.mn.get()));self.diag=(np_,nb,nj,src,errs)
@@ -1036,27 +1133,31 @@ class App:
         if z:self.begin_scan([z])
     def begin_scan(self,sites):
         self.scan_running=True;self.scanb.config(state='disabled');self.selb.config(state='disabled');threading.Thread(target=self.scan_worker,args=(list(sites),),daemon=True).start()
+    def _finalize_scan_record(self,record):
+        z=record['z'];cv=record['cv'];folder=record['folder'];n=record['scan_index']
+        z['cv_status']=triage_status(z,cv);z['cv_score']=opportunity_score(z,cv,z['cv_status']);z['cv_equipment']=hit_text(cv,z);z['cv_max_prob']=cv['max_prob'];z['cv_folder']=str(folder);z['scan_index']=n
+        cv['triage_status']=z['cv_status'];cv['opportunity_score']=z['cv_score'];cv['evidence_text']=z['cv_equipment'];cv['prescreen_reason']=z.get('pre_reason','');cv['attribution_buffer_ft']=campus_buffer_ft(z)
+        (folder/'cv_result.json').write_text(json.dumps(cv,indent=2,default=float),encoding='utf-8')
+        return {'scan_index':n,'facility':z.get('facility',''),'address':z.get('address',''),'cv_status':z['cv_status'],'opportunity_score':z['cv_score'],'model_evidence_hits':z['cv_equipment'],'max_high_value_probability':round(cv['max_prob'],4),'stage1_proposals':cv['stage1_proposals'],'stage1_rescue_proposals':cv.get('stage1_rescue_proposals',0),'deep_rescue_tiles':cv.get('deep_rescue_tiles',0),'deep_rescue_verified':cv.get('deep_rescue_verified',0),'perimeter_rescue_proposals':cv.get('perimeter_rescue_proposals',0),'perimeter_rescue_tiles':cv.get('perimeter_rescue_tiles',0),'perimeter_rescue_verified':cv.get('perimeter_rescue_verified',0),'perimeter_rescue_evidence':cv.get('perimeter_rescue_evidence',0),'thermal_rescue_evidence':cv.get('thermal_rescue_evidence',0),'thermal_review_only_evidence':cv.get('thermal_review_only_evidence',0),'raw_retained_evidence':cv.get('raw_retained_evidence',cv['retained_evidence']),'retained_evidence':cv['retained_evidence'],'outside_parcel_rejected':cv.get('attribution_rejected',0),'neighbor_assigned_evidence':cv.get('cross_property_rejected',0),'gis_score':z.get('score',''),'gis_tier':z.get('tier',''),'prescreen':z.get('pre',False),'prescreen_reason':z.get('pre_reason',''),'largest_building_ft2':z.get('largest',''),'avg_building_ft2':z.get('avg',''),'building_count':z.get('count',0),'land_use':z.get('land',''),'distance_miles':z.get('distance',''),'user_review':z.get('review_status',''),'user_note':z.get('review_note',''),'reviewed_at':'','result_folder':str(folder)}
     def scan_worker(self,sites):
-        stamp=datetime.now().strftime('%Y%m%d_%H%M%S');root=Path.home()/'Downloads'/f'HVAC_Prospecting_Scan_{stamp}';root.mkdir(parents=True,exist_ok=True);self.last_scan_root=root;self.review_csv_path=root/'prospecting_results.csv';rows=[]
+        stamp=datetime.now().strftime('%Y%m%d_%H%M%S');root=Path.home()/'Downloads'/f'HVAC_Prospecting_Scan_{stamp}';root.mkdir(parents=True,exist_ok=True);self.last_scan_root=root;self.review_csv_path=root/'prospecting_results.csv';rows=[];records=[]
         try:
             eng=self.engine()
             for n,z in enumerate(sites,1):
                 fac=z.get('facility') or z.get('address') or f'site_{n}';folder=root/f"{n:03d}_{safe_name(fac+'_'+(z.get('address') or ''))[:100]}"
                 self.r.after(0,lambda n=n,fac=fac:self.st.set(f'Scanning {n}/{len(sites)} — {fac}'))
                 views=campus_images(z,folder/'source');cv=eng.scan_property(views,folder,z,lambda m,n=n,fac=fac:self.r.after(0,lambda m=m,n=n,fac=fac:self.st.set(f'{n}/{len(sites)} {fac}: {m}')))
-                z['cv_status']=triage_status(z,cv);z['cv_score']=opportunity_score(z,cv,z['cv_status']);z['cv_equipment']=hit_text(cv,z);z['cv_max_prob']=cv['max_prob'];z['cv_folder']=str(folder);z['scan_index']=n
-                cv['triage_status']=z['cv_status'];cv['opportunity_score']=z['cv_score'];cv['evidence_text']=z['cv_equipment'];cv['prescreen_reason']=z.get('pre_reason','');cv['attribution_buffer_ft']=campus_buffer_ft(z)
-                (folder/'cv_result.json').write_text(json.dumps(cv,indent=2,default=float),encoding='utf-8')
-                rows.append({'scan_index':n,'facility':z.get('facility',''),'address':z.get('address',''),'cv_status':z['cv_status'],'opportunity_score':z['cv_score'],'model_evidence_hits':z['cv_equipment'],'max_high_value_probability':round(cv['max_prob'],4),'stage1_proposals':cv['stage1_proposals'],'stage1_rescue_proposals':cv.get('stage1_rescue_proposals',0),'deep_rescue_tiles':cv.get('deep_rescue_tiles',0),'deep_rescue_verified':cv.get('deep_rescue_verified',0),'perimeter_rescue_proposals':cv.get('perimeter_rescue_proposals',0),'perimeter_rescue_tiles':cv.get('perimeter_rescue_tiles',0),'perimeter_rescue_verified':cv.get('perimeter_rescue_verified',0),'perimeter_rescue_evidence':cv.get('perimeter_rescue_evidence',0),'thermal_rescue_evidence':cv.get('thermal_rescue_evidence',0),'thermal_review_only_evidence':cv.get('thermal_review_only_evidence',0),'raw_retained_evidence':cv.get('raw_retained_evidence',cv['retained_evidence']),'retained_evidence':cv['retained_evidence'],'outside_parcel_rejected':cv.get('attribution_rejected',0),'gis_score':z.get('score',''),'gis_tier':z.get('tier',''),'prescreen':z.get('pre',False),'prescreen_reason':z.get('pre_reason',''),'largest_building_ft2':z.get('largest',''),'avg_building_ft2':z.get('avg',''),'building_count':z.get('count',0),'land_use':z.get('land',''),'distance_miles':z.get('distance',''),'user_review':z.get('review_status',''),'user_note':z.get('review_note',''),'reviewed_at':'','result_folder':str(folder)})
+                record={'z':z,'cv':cv,'folder':folder,'scan_index':n};records.append(record);rows.append(self._finalize_scan_record(record))
                 self.write_csv(root,rows);self.r.after(0,self.refresh)
-            strong=sum(r['cv_status']=='STRONG' for r in rows);review=sum(r['cv_status']=='REVIEW' for r in rows);surf=strong+review;quiet=sum(r['cv_status']=='QUIET' for r in rows);(root/'SCAN_SUMMARY.txt').write_text(f'HVAC Territory Discovery v0.11.5\nFrozen detector pipeline v0.0.12\nPrimary thresholds 0.07 / 0.35 / 0.45\nParcel buffer: {PARCEL_BUFFER_FT:.0f} ft\n\nProperties analyzed: {len(rows)}\nSTRONG: {strong}\nREVIEW: {review}\nSurfaced total: {surf}\nQUIET: {quiet}\n\nMechanical evidence is geographically de-duplicated across views. Outside-parcel detections do not rank the property. v0.11.5 adds a tightly gated zoomed perimeter rescue for small side-yard heat-rejection equipment, expands rescue to smaller priority sites, and adds context/morphology controls for recurring vehicle, scrap and storage false positives.\n',encoding='utf-8')
+            reassigned=reconcile_cross_property_detections(records);rows=[self._finalize_scan_record(r) for r in records];self.write_csv(root,rows);self.r.after(0,self.refresh)
+            strong=sum(r['cv_status']=='STRONG' for r in rows);review=sum(r['cv_status']=='REVIEW' for r in rows);surf=strong+review;quiet=sum(r['cv_status']=='QUIET' for r in rows);(root/'SCAN_SUMMARY.txt').write_text(f'HVAC Territory Discovery v0.11.6\nFrozen detector pipeline v0.0.12\nPrimary thresholds 0.07 / 0.35 / 0.45\nParcel buffer: {PARCEL_BUFFER_FT:.0f} ft\n\nProperties analyzed: {len(rows)}\nSTRONG: {strong}\nREVIEW: {review}\nSurfaced total: {surf}\nQUIET: {quiet}\nNeighbor-assigned duplicate evidence: {reassigned}\n\nMechanical evidence is geographically de-duplicated across views and properties. Outside-parcel and context-rejected detections do not rank the property. v0.11.6 adds a conservative small-public-parcel prescreen, rejects broad weak thermal debris shapes, and assigns duplicated boundary equipment to the best-supported parcel while retaining raw audit evidence.\n',encoding='utf-8')
             self.r.after(0,lambda:self.st.set(f'Scan complete: {strong} STRONG + {review} REVIEW / {len(rows)} | {root}'));self.r.after(0,lambda:messagebox.showinfo('Scan Complete',f'Analyzed {len(rows)} properties.\nSTRONG {strong} | REVIEW {review} | QUIET {quiet}.\n\nResults:\n{root}'))
         except Exception as e:
             detail=traceback.format_exc()
             try:
                 diag=Path.home()/'Downloads'/'HVAC_CV_ERROR.txt'
                 diag.write_text(
-                    'HVAC Territory Discovery v0.11.5\n\n'+detail+
+                    'HVAC Territory Discovery v0.11.6\n\n'+detail+
                     '\nExecutable: '+str(sys.executable)+
                     '\n_MEIPASS: '+str(getattr(sys,'_MEIPASS',None))+
                     '\nCandidate asset: '+str(resource_path('models','candidate.pt'))+

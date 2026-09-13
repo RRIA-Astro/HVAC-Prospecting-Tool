@@ -1,18 +1,47 @@
-HVAC Territory Discovery v0.11.5 — Perimeter Recall
-====================================================
+HVAC Territory Discovery v0.11.6 — Precision Ownership
+=======================================================
 
 Purpose
 -------
 Desktop prospecting triage for commercial HVAC opportunities in Virginia Beach aerial imagery.
-The application discovers parcels, applies a high-recall GIS prescreen, downloads parcel/building
+The application discovers parcels, applies a precision-weighted GIS prescreen, downloads parcel/building
 views, and runs the bundled two-stage detector locally. Results are STRONG, REVIEW, or QUIET.
 
 This is a prospecting filter, not an engineering survey or equipment inventory. A REVIEW result
 means investigate further. QUIET means no rankable evidence was observed in the available imagery;
 it does not prove that valuable equipment is absent.
 
-What v0.11.5 fixes
-------------------
+What v0.11.6 changes
+--------------------
+This build converts the September 13 field review into three narrow precision controls while
+leaving the successful v0.11.5 detector and rescue operating points frozen.
+
+1. Ambiguous small Public/Semi Public parcels are stopped at prescreen. Virginia Beach parcel data
+   can apply that use code to residential common-interest areas, while a nearby street or court
+   name is attached as the facility. A site below 8,000 ft2 with at most two buildings now needs
+   explicit institutional or utility identity (for example school, church, medical, government,
+   fire/police, library, utility, pump station, substation, water treatment, or military).
+2. A normal thermal box at least 32 x 28 ft is context-rejected when both total thermal probability
+   is below 0.55 and best-class probability is below 0.30. This removes the broad debris lookalike
+   at 1609 Diamond Springs without moving the underlying model thresholds.
+3. After a batch scan, near-identical thermal detections seen from two ordinary parcel scans are
+   assigned to one property. A mapped containing parcel wins first, followed by parcel distance,
+   building distance, and confidence. The losing site's raw detection remains auditable and is
+   reported as Neighbor-assigned evidence. Campus-adjacent evidence is excluded from this rule.
+
+Replay of the completed 178-property v0.11.5 field scan changes only two imagery-ranking outcomes:
+
+- 1609 Diamond Springs: REVIEW -> QUIET (broad weak debris shape).
+- 5901 Thurston: REVIEW -> QUIET (the same physical fan bank is assigned to 5925 Thurston).
+
+The resulting stored-evidence replay is 15 STRONG, 19 REVIEW, and 144 QUIET. 5925 Thurston remains
+REVIEW. 1700 Shelton and 5580 Shell remain REVIEW, and 5501 Wesleyan remains QUIET. On fresh
+discovery, the precision prescreen filters 40 ambiguous residential-scale Public/Semi Public rows
+from that territory before imagery, including 1149 and 1165 Pond Cypress, 1424 Pandoria, and 5781
+Lake Edward. It preserves the explicitly identified Virginia Tech property at 1444 Diamond Springs.
+
+Inherited v0.11.5 perimeter recall
+----------------------------------
 5925 Thurston was still QUIET in the completed v0.11.4 field scan. The probable side-yard
 heat-rejection unit is visible in F02_138944sf.jpg, but neither the normal tiles nor the shifted
 1024-pixel rescue tiles produced a Stage-1 proposal on it.
@@ -104,12 +133,14 @@ paths. Low-Stage-1 rescue evidence is REVIEW-only.
 Output and audit fields
 -----------------------
 Each site folder retains source imagery, annotated evidence, cv_result.json, and a view manifest.
-The scan CSV/JSON now includes:
+The scan CSV/JSON includes:
 
 - stage1_rescue_proposals, deep_rescue_tiles, deep_rescue_verified
 - perimeter_rescue_proposals, perimeter_rescue_tiles, perimeter_rescue_verified
 - perimeter_rescue_evidence, thermal_rescue_evidence, thermal_review_only_evidence
 - context-rejected evidence summaries while preserving raw detections
+- neighbor_assigned_evidence in CSV plus cross_property_rejected and the rejected detection audit
+  records in cv_result.json
 
 Run from source
 ---------------
@@ -124,7 +155,7 @@ Build the portable Windows app
 Upload this source tree to GitHub with .github/workflows/build-windows.yml and models/ intact. Run
 the Build Windows EXE workflow. The artifact will be:
 
-  HVAC_Territory_Discovery_v0115_Windows.zip
+  HVAC_Territory_Discovery_v0116_Windows.zip
 
 Extract that ZIP before running the EXE. Keep the generated folder together because PyInstaller
 onedir dependencies and model assets are required at runtime.
@@ -133,10 +164,11 @@ Validation
 ----------
 Run:
 
-  python -m unittest -v test_v0115_logic.py
+  python -m unittest -v test_v0116_logic.py
 
 The suite checks frozen thresholds, 5925 zoom coverage, zoom coordinate mapping, smaller-priority
-rescue routing, known package/thermal context cases, cross-class fusion, and storage morphology.
+rescue routing, known package/thermal context cases, the 1609 debris rejection, ambiguous-small-
+public prescreening, cross-view and cross-property fusion, and storage morphology.
 
-Keep v0.10.1 as the dedicated Training-Safe labeling app. v0.11.5 remains the prospecting and
+Keep v0.10.1 as the dedicated Training-Safe labeling app. v0.11.6 remains the prospecting and
 field-validation build.

@@ -8,7 +8,7 @@ External Round-4 blind validation: 40 fresh properties; 18 target-positive; 22 c
 
 This is a prospecting filter, not an engineering survey or inventory. Cooling towers remain the weakest class. QUIET is not proof of absence.
 
-Packaging note: v0.11.5 continues to store ResNet18 weights in FP16 and loads them into the normal FP32 network at runtime. Detector weights and frozen thresholds are unchanged from v0.11.1. v0.11.5 changes bounded rescue and ranking logic rather than retraining the detector.
+Packaging note: v0.11.6 continues to store ResNet18 weights in FP16 and loads them into the normal FP32 network at runtime. Detector weights and frozen thresholds are unchanged from v0.11.1. v0.11.6 changes prescreen, ranking, and cross-property attribution logic rather than retraining the detector.
 
 
 v0.11.5 field logic note:
@@ -17,3 +17,10 @@ The underlying v0.0.12 Stage-1 and verifier weights remain unchanged. Primary th
 All low-Stage-1 rescue detections are REVIEW-only, even when the Stage-2 verifier likes them. The Stage-2 numeric candidate-confidence feature is floored at 0.07 only for rescue scoring. Normal detections are unchanged.
 
 Thermal STRONG triage remains confidence-aware. v0.11.5 additionally context-rejects weak overview seams, distant rescue evidence, broad low-confidence overview boxes, and storage-like morphology while preserving raw detections for audit. This is ranking logic only; it does not alter model weights or normal detector thresholds.
+
+v0.11.6 field logic note:
+Normal and rescue inference are byte-for-byte unchanged from v0.11.5. The prescreen now excludes
+small ambiguous Public/Semi Public parcels unless they have explicit institutional/utility identity.
+Ranking rejects broad near-square normal thermal boxes when p<0.55 and best class<0.30. Batch scans
+also reconcile near-identical ordinary-parcel thermal detections across properties and retain the
+losing detection in the JSON audit. Campus-adjacent evidence is not cross-property reconciled.

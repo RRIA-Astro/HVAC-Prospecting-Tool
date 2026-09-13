@@ -1,0 +1,45 @@
+HVAC Territory Discovery v0.11.6
+================================
+
+Detector model: unchanged frozen v0.0.12
+Primary thresholds: unchanged 0.07 / 0.35 / 0.45
+Shifted-rescue Stage-1 floor: unchanged 0.015
+Zoomed-perimeter Stage-1 floor: unchanged 0.008
+
+1. Precision-first small-public prescreen
+- Adds an AMBIGUOUS SMALL PUBLIC PARCEL result for Public/Semi Public sites below 8,000 ft2 with
+  at most two buildings and no explicit institutional or utility identity.
+- Protects identified medical, education, religious, government, emergency-services, library,
+  utility, water/wastewater, and military uses.
+- Filters 1149 Pond Cypress before imagery instead of allowing its residential landscaping
+  lookalike to become STRONG.
+- On the supplied territory, this removes 40 residential-scale rows from automated imagery work.
+
+2. Broad weak thermal-shape rejection
+- Context-rejects a normal, non-rescue thermal box at least 32 x 28 ft only when p<0.55 and best
+  thermal-class probability<0.30.
+- Moves 1609 Diamond Springs from REVIEW to QUIET; its retained box is debris behind the building.
+- Leaves the 5580 Shell CRAC-condenser/chiller ambiguity at REVIEW.
+
+3. Cross-property ownership
+- Reconciles near-identical rankable tower/chiller detections after all properties in a batch scan
+  have completed.
+- Chooses the mapped containing parcel first, then parcel distance, building distance, and model
+  confidence. Raw evidence remains in the losing site's JSON audit.
+- Assigns the shared Thurston fan-bank detection to 5925 Thurston and moves 5901 Thurston to QUIET.
+- Excludes CAMPUS ADJACENT evidence from this rule so institutional-campus recall is unchanged.
+
+4. Output and build
+- Adds neighbor_assigned_evidence to prospecting_results.csv.
+- Adds cross_property_rejected and cross_property_rejected_detections to cv_result.json.
+- Scan summary reports the number of neighbor-assigned duplicate detections.
+- Windows workflow, executable, artifact, documentation, and tests advance to v0116.
+
+5. Ground-truth protections
+- 5925 Thurston remains REVIEW.
+- 1700 Shelton and 5580 Shell remain REVIEW.
+- 5501 Wesleyan remains QUIET, which is an acceptable borderline outcome.
+- 1444 and 1569 Diamond Springs remain surfaced by their existing paths.
+
+The detector, verifier, primary thresholds, and both v0.11.5 rescue paths are unchanged. v0.11.6
+is a targeted precision and parcel-ownership build, not a retrained model.

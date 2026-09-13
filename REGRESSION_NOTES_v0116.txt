@@ -1,0 +1,71 @@
+HVAC Territory Discovery v0.11.6 — Regression Notes
+====================================================
+
+Input field run
+---------------
+HVAC_Prospecting_Scan_20260913_093050 (178 properties), produced by v0.11.5.
+
+User-reviewed calibration cases
+-------------------------------
+- 1149 Pond Cypress: residential home, no tower/chiller; must fail prescreen.
+- 5501 Wesleyan: seven mid-sized packaged units; acceptable as either low-priority REVIEW or QUIET.
+- 1609 Diamond Springs: debris behind building; must be QUIET.
+- 1700 Shelton: three large packaged AHUs plus smaller units; must surface for review.
+- 5580 Shell: likely CRAC remote condenser, possible chiller; REVIEW is correct.
+- 5925 Thurston: probable side-yard heat-rejection equipment; must surface for review.
+
+Saved-result ranking and ownership replay
+-----------------------------------------
+All 178 cv_result.json files were replayed through v0.11.6 ranking. The cross-property reconciler
+found exactly one duplicate cluster. Result: 15 STRONG, 19 REVIEW, and 144 QUIET. Exactly two stored
+imagery outcomes changed:
+
+- 5901 Thurston: REVIEW -> QUIET. Its cooling-tower center is 5.92 ft from the 5925 detection. The
+  5901 hypothesis is 11.82 ft outside its mapped parcel and 43.53 ft from its building; the 5925
+  hypothesis is inside its parcel and 15.31 ft from its building. Ownership therefore goes to 5925.
+- 1609 Diamond Springs: REVIEW -> QUIET. Its normal chiller hypothesis is approximately 39.15 x
+  35.88 ft with p=0.4564 and best class=0.2607, meeting the broad weak-shape rejection.
+
+Protected outcomes in the same replay:
+
+- 5925 Thurston: REVIEW.
+- 1700 Shelton: REVIEW.
+- 5580 Shell: REVIEW.
+- 5501 Wesleyan: QUIET.
+- 1444 Diamond Springs: REVIEW.
+- 1569 Diamond Springs: REVIEW in this fresh field run, with both tower-review and packaged evidence.
+
+Prescreen replay
+----------------
+Applying the v0.11.6 prescreen to the supplied field-run CSV at the default 10,000 ft2 setting
+filters 40 of 178 analyzed rows as AMBIGUOUS SMALL PUBLIC PARCEL. All 40 are Public/Semi Public,
+below 8,000 ft2, have no more than two buildings, and lack explicit institutional/utility identity
+in the saved facility fields. This includes 1149 and 1165 Pond Cypress, 1424 Pandoria, and 5781 Lake
+Edward. The identified Virginia Tech campus at 1444 Diamond Springs and Unity Church at 5580 Shell
+continue to pass.
+
+Automated regression suite
+--------------------------
+Fourteen deterministic tests pass. In addition to inherited v0.11.5 coverage, they verify:
+
+- 1149-style generic small-public parcels fail prescreen while an identified school is protected.
+- The exact 1609 box is rejected and the exact 5580 review pattern remains rankable.
+- Cross-property duplicate resolution prefers the containing 5925 parcel over 5901.
+- Separate nearby machines and CAMPUS ADJACENT evidence are not merged.
+- Frozen primary and rescue operating points remain unchanged.
+
+Model asset SHA-256 comparison
+------------------------------
+Each v0.11.6 asset is byte-identical to the supplied v0.11.5 source:
+
+- candidate.pt: ad60ee4e6e1c158309a8f2f48a25d0fd820a3f2b322e6edfe75a57b813aef00a
+- resnet18_embedder_state_fp16.pt: 7dbdd679df66598a8d9e63f983507eb7900af9553595a3bb250ee6e4795e6ffd
+- verifier_runtime.json: 678a67988474a9603856379b10580268ee6c5ae04d34580905b0f53f20ecbd6a
+- pipeline_config.json: fb11c9e25f2e52dcec34c6b74eea21d8790867da581bca24ec2be93446099925
+
+Integration boundary
+--------------------
+The Linux validation exercises the application logic, and model bytes are hash-verified against the
+field-tested v0.11.5 source. This workspace does not include PyTorch, so model loading was not rerun
+locally. The included GitHub Actions workflow installs CPU PyTorch, runs the regression suite, checks
+the source and bundled model assets, and produces the portable Windows executable.
