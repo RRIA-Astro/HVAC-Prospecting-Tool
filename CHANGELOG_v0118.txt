@@ -1,0 +1,21 @@
+HVAC Territory Discovery v0.11.8 — Norfolk Expansion
+==================================================
+Date: 2026-09-18
+
+- Adds Norfolk/Virginia Beach city selection and per-property source routing.
+- Norfolk: public city address points, parcel polygons, building polygons, and 2025 imagery.
+- Joins Norfolk GPINs to the daily-updated FY27 assessment dataset in bounded batches.
+- Normalizes jurisdiction-specific property/building classifications, preserving raw audit data.
+- Uses building-improvement use before land ownership; treats commercial condo ownership separately
+  from residential occupancy. Maps mini-warehouse/self-storage, residences, and priority uses.
+- Preserves multi-part parcels sharing a GPIN and strict representative-point radius filtering.
+- Filters Norfolk demolished/non-building structures; logs city/fallback footprint provenance.
+- Rejects wrong-size/blank/error imagery exports without silently substituting another source.
+- Adds source/cap/discovery auditing to manifests, CV JSON, CSV, and root scan metadata.
+- Protects city/discovery/scan state so source selection cannot change mid-request.
+- Derives Windows executable/artifact names from APP_VERSION; uses stable regression-test filenames.
+- Updates build actions to Node 24 and preserves all required model assets.
+
+FROZEN: v0.11.7 detector, verifier, prescreen rules, rescue paths, thresholds, image view scales,
+attribution, scoring, and triage. Models are byte-for-byte unchanged. Norfolk performance awaits
+field validation; this release does not claim geographic generalization accuracy.

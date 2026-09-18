@@ -1,0 +1,56 @@
+HVAC Territory Discovery v0.11.8 — Validation Notes
+=================================================
+
+The build's automated test command is:
+  python -m unittest -v test_detection_logic.py test_territories.py test_release_contract.py
+
+Result before packaging: 62 tests passed. Workflow YAML parsed successfully and release_identity.py
+reported APP_VERSION=0.11.8, APP_TAG=v0118, APP_NAME=HVAC_Territory_Discovery_v0118.
+
+Frozen detection checks
+-----------------------
+The full inherited v0.11.7 regression suite checks the known package/thermal controls, 5925 zoom
+coverage, small-priority rescue, strategic near-miss REVIEW routing, storage morphology, and
+cross-view/property de-duplication. Tests assert DETECTOR_BASELINE_VERSION instead of a stale
+APP_VERSION literal. A separate contract checks all retained model assets and baseline inference,
+ranking, prescreen/geometry helper code and constants against the v0.11.7 source.
+
+Norfolk adapter checks
+----------------------
+Tests cover the separate city endpoints, 4326 geometry, strict radius, GPIN normalization,
+batched/paginated assessment queries, multi-part parcels, residential exclusions, commercial-condo
+ownership, self-storage, institutional/industrial/utility priorities, improvement-vs-land use,
+ambiguous address rejection, no silent city fallback, missing-assessment auditing, demolished
+footprint filtering, footprint fallback, and complete footprint-service failure.
+
+Acquisition/output checks
+-------------------------
+City exports use identical projected frames and pixel counts. Every campus view routes by its
+property's territory. Wrong-sized, completely blank, and ArcGIS error exports stop before inference.
+Scan/source metadata, CSV fields, cap disclosure, and app-derived release names are tested.
+
+Live source smoke tests
+-----------------------
+Official Norfolk service metadata and actual city queries were checked on 2026-09-18. The City Hall
+address resolves to approximately -76.284637, 36.847094. A 0.5-mile discovery exercise found 318
+GPIN-grouped parcels, zero unmatched FY27 assessment GPINs, and usable NORFOLK CITY building polygons.
+The final adapter recheck returned 280 current building polygons, 250 joined footprints, 317 candidate
+rows before the cap, and 76 prescreen-passing properties. All 76 passing candidates fit under the
+250 displayed-row cap; only nonpassing rows were omitted. No assessment matches were missing and
+the NORFOLK CITY source was used without fallback. Counts can change as city data is updated.
+
+A real 2025 MapServer export at 1800 x 1800 pixels was downloaded and visually inspected. It is
+usable aerial imagery, not a basemap/error page. No automatic switch to lower-quality/older imagery
+is implemented. The final downloader also retrieved and validated a real 1800 x 1800 Norfolk export.
+This is a source check, not an independent audit of native sensor resolution.
+
+Limits
+------
+Offline regressions and source smoke checks are not a full Norfolk detector validation. The scratch
+environment lacks torch/torchvision/ultralytics and a desktop display. Windows PyInstaller assembly
+and full model inference are to be exercised through the GitHub-built EXE and Richard's blind scan.
+Headless UI-state tests exercise initialization, city switching, control locks, completed/failed scan
+output, and unlocking after failure; they do not substitute for a visual Windows GUI check.
+Tall-building shadows/roof displacement, outdated/incomplete geometry, hidden/fanless equipment,
+and classifier lookalikes remain limitations of the frozen baseline. No changes were made for the
+3432 Virginia Beach construction outlier or other reviewed detector misses in this release.

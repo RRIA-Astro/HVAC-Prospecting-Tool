@@ -1,28 +1,43 @@
 import base64,json,math,threading,tkinter as tk,urllib.parse,urllib.request,tempfile,time,shutil,sys,os,subprocess,csv,traceback
 from tkinter import ttk,messagebox,filedialog,simpledialog
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from territories import (PROFILES,ASSESSMENT_FIELDS,NORFOLK_BUILDING_CONTEXT,get_profile,numeric_id,canonical_address,
+                         norfolk_address_where,assessment_address,norfolk_land_use,assessment_choice,source_metadata)
 
-ADDR="https://geo.vbgov.com/mapservices/rest/services/Business_Systems/Pictometry_Online/MapServer/0/query"
-PARCEL="https://geo.vbgov.com/mapservices/rest/services/Business_Systems/Pictometry_Online/MapServer/4/query"
-# City of Virginia Beach authoritative planimetric Building Footprints
-CITY_BLDGS="https://geo.vbgov.com/mapservices/rest/services/Basemaps/Structures_and_Physical_Features/MapServer/6/query"
-FALLBACK_BLDGS="https://dsfmportal.dcr.virginia.gov/server/rest/services/CivilReference/Civil_Reference_Layers/MapServer/2/query"
-AERIAL="https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/ImageServer/exportImage"
+# Backward-compatible Virginia Beach endpoint names; profiles own the routes.
+ADDR=PROFILES['virginia_beach']['address']
+PARCEL=PROFILES['virginia_beach']['parcel']
+CITY_BLDGS=PROFILES['virginia_beach']['building']
+FALLBACK_BLDGS=PROFILES['virginia_beach']['fallback_building']
+AERIAL=PROFILES['virginia_beach']['imagery']
 
 def gj(u,p):
     q=urllib.parse.urlencode(p)
-    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":"HVAC-Territory/0.11.7"})
+    req=urllib.request.Request(u+"?"+q,headers={"User-Agent":f"HVAC-Territory/{APP_VERSION}"})
     with urllib.request.urlopen(req,timeout=90) as r:
         d=json.loads(r.read().decode())
-    if "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
+    if isinstance(d,dict) and "error" in d: raise RuntimeError(d["error"].get("message",str(d["error"])))
+    if isinstance(d,dict) and d.get("errorCode"):raise RuntimeError(d.get("message") or str(d["errorCode"]))
     return d
 
-def geocode(t):
-    m=gj(ADDR.rsplit("/query",1)[0],{"f":"json"})
+def geocode(t,territory="virginia_beach"):
+    profile=get_profile(territory);url=profile["address"]
+    if territory=="norfolk":
+        d=gj(url,{"f":"json","where":norfolk_address_where(t),"outFields":"FULL_ADD",
+                  "returnGeometry":"true","outSR":"4326","resultRecordCount":100})
+        fs=d.get("features",[])
+        exact=[f for f in fs if canonical_address(f.get("attributes",{}).get("FULL_ADD") or "")==canonical_address(t)]
+        fs=exact or fs
+        points={(float(f["geometry"]["x"]),float(f["geometry"]["y"])) for f in fs if f.get("geometry")}
+        if not points:raise RuntimeError("Search-center address not found in Norfolk. Check the house number and street name.")
+        if len(points)>1:raise RuntimeError("More than one Norfolk search-center location matched. Enter the complete street address, including its direction and suffix.")
+        return points.pop()
+    m=gj(url.rsplit("/query",1)[0],{"f":"json"})
     fs=[f["name"] for f in m.get("fields",[]) if f.get("type")=="esriFieldTypeString"]
     fs=([x for x in fs if any(k in x.lower() for k in ("address","full","street","site"))] or fs)[:8]
     s=t.replace("'","''")
-    d=gj(ADDR,{"f":"json","where":" OR ".join(f"UPPER({f}) LIKE UPPER('%{s}%')" for f in fs),
+    d=gj(url,{"f":"json","where":" OR ".join(f"UPPER({f}) LIKE UPPER('%{s}%')" for f in fs),
                "outFields":"*","returnGeometry":"true","outSR":"4326","resultRecordCount":10})
     if not d.get("features"):raise RuntimeError("Search-center address not found.")
     g=d["features"][0]["geometry"];return float(g["x"]),float(g["y"])
@@ -61,50 +76,104 @@ def pages(u,p,chunk=1800):
         off+=len(fs)
     return out
 
-def load_parcels(x,y,mi):
+def load_norfolk_assessments(gpins):
+    ids=sorted({numeric_id(v) for v in gpins}-{''});url=get_profile("norfolk")["assessment"]
+    batches=[ids[i:i+150] for i in range(0,len(ids),150)]
+    def batch(ids):
+        rows=[];offset=0
+        while True:
+            data=gj(url,{"$select":','.join(ASSESSMENT_FIELDS),"$where":"gpin in ("+','.join(ids)+")",
+                         "$order":"gpin,lrsn,extension","$limit":2000,"$offset":offset})
+            if not isinstance(data,list):raise RuntimeError("Norfolk assessment service returned an unexpected response; discovery stopped before prescreening.")
+            rows.extend(data)
+            if len(data)<2000:return rows
+            offset+=len(data)
+    out={}
+    # Bounded concurrency reduces citywide join latency without per-property scraping.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        for rows in pool.map(batch,batches):
+            for row in rows:
+                ident=numeric_id(row.get("gpin"))
+                if ident:out.setdefault(ident,[]).append(row)
+    return out
+
+def enrich_norfolk_parcels(parcels,assessments):
+    for p in parcels:
+        records=assessments.get(numeric_id(p.get("gpin")),[]);chosen=assessment_choice(records)
+        p.update(assessment_source=get_profile("norfolk")["assessment_label"],assessment_matched=bool(chosen),
+                 raw_property_use=' | '.join(sorted({str(r.get("property_use") or "") for r in records}-{''})),
+                 raw_classification=' | '.join(sorted({str(r.get("property_class_description") or "") for r in records}-{''})))
+        if chosen:
+            p["address"]=assessment_address(chosen) or p["address"];p["land"]=norfolk_land_use(chosen)
+        else:p["land"]="UNKNOWN"
+    return parcels
+
+def load_parcels(x,y,mi,territory="virginia_beach"):
+    profile=get_profile(territory)
     a,b,c,d=bbox(x,y,mi)
     p={"f":"json","where":"1=1","geometry":f"{a},{b},{c},{d}","geometryType":"esriGeometryEnvelope",
        "inSR":"4326","spatialRel":"esriSpatialRelIntersects",
-       "outFields":"PAR_GPIN,FULL_ADDR,PROP_ADDRESS,LAND_USE,ZONING,PROP_CLASS,LATITUDE,LONGITUDE",
+       "outFields":profile["parcel_fields"],
        "returnGeometry":"true","outSR":"4326"}
     out=[]
-    for f in pages(PARCEL,p):
+    if territory=="norfolk":p["orderByFields"]="OBJECTID ASC"
+    for f in pages(profile["parcel"],p,chunk=profile["query_chunk"]):
         at=f.get("attributes",{});rs=f.get("geometry",{}).get("rings",[]);cx,cy=centroid(rs)
         try:lon=float(at.get("LONGITUDE") or cx);lat=float(at.get("LATITUDE") or cy)
         except:continue
         # Strict user radius on the property's representative point.
         if miles(x,y,lon,lat)>mi:continue
+        if territory=="norfolk":
+            ident=numeric_id(at.get("GPIN"));oid=str(at.get("OBJECTID") or "")
+            out.append({"gpin":ident or "NORFOLK-OID:"+oid,"address":"GPIN "+ident if ident else "Norfolk parcel "+oid,
+                        "land":"UNKNOWN","zone":"","lon":lon,"lat":lat,"rings":rs,"psq":area(rs),
+                        "territory":territory,"city":profile["name"],"tax_account":at.get("TAX_ACCT") or ""})
+            continue
         out.append({"gpin":str(at.get("PAR_GPIN") or ""),"address":at.get("FULL_ADDR") or at.get("PROP_ADDRESS") or "",
                     "land":at.get("LAND_USE") or "","zone":at.get("ZONING") or "",
-                    "lon":lon,"lat":lat,"rings":rs,"psq":area(rs)})
+                    "lon":lon,"lat":lat,"rings":rs,"psq":area(rs),"territory":territory,"city":profile["name"],
+                    "assessment_source":profile["assessment_label"],"assessment_matched":True})
+    if territory=="norfolk":
+        # Preserve all polygon parts of a campus sharing one assessment GPIN.
+        grouped={}
+        for parcel in out:
+            ident=parcel["gpin"]
+            if ident in grouped:
+                grouped[ident]["rings"].extend(parcel["rings"]);grouped[ident]["psq"]+=parcel["psq"]
+            else:grouped[ident]=parcel
+        out=list(grouped.values())
+        out=enrich_norfolk_parcels(out,load_norfolk_assessments([p["gpin"] for p in out]))
     return out
 
-def _query_buildings(url,x,y,mi,outfields):
+def _query_buildings(url,x,y,mi,outfields,where="1=1",chunk=1800,city=""):
     a,b,c,d=bbox(x,y,mi)
-    p={"f":"json","where":"1=1","geometry":f"{a},{b},{c},{d}","geometryType":"esriGeometryEnvelope",
+    p={"f":"json","where":where,"geometry":f"{a},{b},{c},{d}","geometryType":"esriGeometryEnvelope",
        "inSR":"4326","spatialRel":"esriSpatialRelIntersects","outFields":outfields,
        "returnGeometry":"true","outSR":"4326"}
     out=[]
-    for f in pages(url,p):
+    if city:p["orderByFields"]="OBJECTID ASC"
+    for f in pages(url,p,chunk=chunk):
         rs=f.get("geometry",{}).get("rings",[]);cx,cy=centroid(rs)
         if cx is None:continue
         if miles(x,y,cx,cy)<=mi*1.03:
             at=f.get("attributes",{})
             out.append({"lon":cx,"lat":cy,"sq":round(area(rs)),"rings":rs,
-                        "fcode":at.get("fcode") or at.get("FCODE") or "",
+                        "fcode":NORFOLK_BUILDING_CONTEXT.get(at.get("FTR_CODE"),"") if city=="norfolk" else at.get("fcode") or at.get("FCODE") or "",
+                        "feature_code":at.get("FTR_CODE") if city=="norfolk" else None,
                         "height":at.get("height_highest")})
     return out
 
-def load_buildings(x,y,mi):
-    errors=[]
+def load_buildings(x,y,mi,territory="virginia_beach"):
+    errors=[];profile=get_profile(territory);label=profile["building_source"]
     try:
-        b=_query_buildings(CITY_BLDGS,x,y,mi,"*")
-        if b:return b,"VB CITY",errors
-        errors.append("VB CITY returned 0 footprints")
+        b=_query_buildings(profile["building"],x,y,mi,"*",profile["building_where"],profile["query_chunk"],
+                           "norfolk" if territory=="norfolk" else "")
+        if b:return b,label,errors
+        errors.append(label+" returned 0 footprints")
     except Exception as e:
-        errors.append("VB CITY: "+str(e))
+        errors.append(label+": "+str(e))
     try:
-        b=_query_buildings(FALLBACK_BLDGS,x,y,mi,"*")
+        b=_query_buildings(profile["fallback_building"],x,y,mi,"*")
         if b:return b,"VA CIVILREF",errors
         errors.append("VA CIVILREF returned 0 footprints")
     except Exception as e:
@@ -248,8 +317,13 @@ def prescreen(p,mn):
     if not poor_use and largest>=10000:return True,f"COMMERCIAL SIZE: {largest:,} ft2"
     return False,"FILTERED"
 
-def discover(x,y,mi,mn):
-    ps=load_parcels(x,y,mi);assign_facility_names(ps,load_osm_names(x,y,mi));bs,bsource,berrors=load_buildings(x,y,mi)
+def discover(x,y,mi,mn,territory="virginia_beach",report=None):
+    get_profile(territory)
+    ps=load_parcels(x,y,mi,territory);assign_facility_names(ps,load_osm_names(x,y,mi));bs,bsource,berrors=load_buildings(x,y,mi,territory)
+    if territory=="norfolk" and not bs:
+        raise RuntimeError("No usable Norfolk building footprints were returned. Discovery stopped before prescreening. "+' | '.join(berrors))
+    unmatched=sum(p.get("assessment_matched") is False for p in ps)
+    if unmatched:berrors.append(f"{unmatched} Norfolk parcels have no FY27 assessment match; kept as UNKNOWN, not assumed residential or public.")
     joined=0
     for b in bs:
         hits=[p for p in ps if pinpoly(b["lon"],b["lat"],p["rings"])]
@@ -267,7 +341,7 @@ def discover(x,y,mi,mn):
         p["storage_like"]=repetitive_storage_like(p)
         p["tier"],p["score"]=classify(p["land"],p["zone"],largest,avg,count,fcodes)
         p["pre"],p["pre_reason"]=prescreen(p,mn)
-        p["source"]=bsource if bl else "FOOTPRINT MISSING"
+        p["source"]=bsource if bl else "FOOTPRINT MISSING";p["imagery_source"]=get_profile(territory)["imagery_label"]
         rows.append(p)
     ded={}
     for p in rows:
@@ -275,22 +349,50 @@ def discover(x,y,mi,mn):
         if k not in ded or p["score"]>ded[k]["score"]:ded[k]=p
     out=list(ded.values())
     out.sort(key=lambda z:(0 if z["pre"] else 1,-z["score"],-(z["largest"] or 0),z["distance"]))
+    if report is not None:
+        report.update(territory=territory,center_longitude=x,center_latitude=y,radius_miles=mi,size_threshold_ft2=mn,
+                      parcels_in_radius=len(ps),footprints_returned=len(bs),footprints_joined=joined,
+                      candidates_before_limit=len(out),prescreen_pass_before_limit=sum(bool(z["pre"]) for z in out),
+                      displayed_candidates=min(250,len(out)),candidate_limit=250,truncated=len(out)>250,
+                      displayed_prescreen_pass=sum(bool(z["pre"]) for z in out[:250]),
+                      assessment_unmatched=unmatched,footprint_source=bsource,warnings=list(berrors))
     return out[:250],len(ps),len(bs),joined,bsource,berrors
 
 
-def aerial(x,y,sf,out):
-    side=max(650,min(1800,math.sqrt(max(sf or 30000,1))*3.2));h=side*.3048/2;R=6378137
+def image_request_params(x,y,side,pixels=1800,territory="virginia_beach"):
+    profile=get_profile(territory);h=side*.3048/2;R=6378137
     X=R*math.radians(x);Y=R*math.log(math.tan(math.pi/4+math.radians(y)/2))
-    q=urllib.parse.urlencode({"f":"image","bbox":f"{X-h},{Y-h},{X+h},{Y+h}","bboxSR":"3857",
-                              "imageSR":"3857","size":"1800,1800","format":"jpg"})
-    with urllib.request.urlopen(AERIAL+"?"+q,timeout=120) as r:Path(out).write_bytes(r.read())
+    params={"f":"image","bbox":f"{X-h},{Y-h},{X+h},{Y+h}","bboxSR":"3857",
+            "imageSR":"3857","size":f"{pixels},{pixels}","format":"jpg"}
+    if profile["imagery_kind"]=="map_server":params.update(transparent="false",layers="show:0")
+    return profile["imagery"],params
+
+def download_image(url,params,out,pixels):
+    req=urllib.request.Request(url+"?"+urllib.parse.urlencode(params),headers={"User-Agent":f"HVAC-Territory/{APP_VERSION}"})
+    with urllib.request.urlopen(req,timeout=120) as response:data=response.read()
+    # Never run inference on an ArcGIS error page, blank coverage, or resized export.
+    if data.lstrip().startswith(b'{'):
+        try:msg=json.loads(data).get("error",{}).get("message") or "Imagery service returned JSON instead of an image."
+        except Exception:msg="Imagery service returned an invalid response."
+        raise RuntimeError(msg)
+    import io
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            im.load()
+            if im.size!=(pixels,pixels):raise RuntimeError(f"Imagery export size {im.size} differs from requested {(pixels,pixels)}; detection scale would be invalid.")
+            if all(lo==hi for lo,hi in im.convert("RGB").getextrema()):raise RuntimeError("Imagery export is blank. Check this city's coverage before scanning.")
+    except RuntimeError:raise
+    except Exception as exc:raise RuntimeError("Imagery service did not return a readable image.") from exc
+    Path(out).write_bytes(data)
+
+def aerial(x,y,sf,out,territory="virginia_beach"):
+    side=max(650,min(1800,math.sqrt(max(sf or 30000,1))*3.2))
+    url,params=image_request_params(x,y,side,territory=territory);download_image(url,params,out,1800)
 
 
-def aerial_side(x,y,side_ft,out,pixels=1800):
-    side=max(250,min(2400,float(side_ft)));h=side*.3048/2;R=6378137
-    X=R*math.radians(x);Y=R*math.log(math.tan(math.pi/4+math.radians(y)/2))
-    q=urllib.parse.urlencode({"f":"image","bbox":f"{X-h},{Y-h},{X+h},{Y+h}","bboxSR":"3857","imageSR":"3857","size":f"{pixels},{pixels}","format":"jpg"})
-    with urllib.request.urlopen(AERIAL+"?"+q,timeout=120) as r:Path(out).write_bytes(r.read())
+def aerial_side(x,y,side_ft,out,pixels=1800,territory="virginia_beach"):
+    side=max(250,min(2400,float(side_ft)))
+    url,params=image_request_params(x,y,side,pixels,territory);download_image(url,params,out,pixels)
 
 def lonlat_offset(lon,lat,dx_ft,dy_ft):
     return (lon+dx_ft/(69.172*5280*max(.2,math.cos(math.radians(lat)))),lat+dy_ft/(69*5280))
@@ -390,17 +492,18 @@ def _coverage_centers(z,tile_side=1100.0,max_tiles=9):
     return [(a,b) for a,b,_ in cand]
 
 def campus_images(z,root):
-    root=Path(root);root.mkdir(parents=True,exist_ok=True);bs=meaningful_buildings(z);views=[]
+    root=Path(root);root.mkdir(parents=True,exist_ok=True);bs=meaningful_buildings(z);views=[];territory=z.get("territory") or "virginia_beach"
+    get_profile(territory)
     plon,plat,pw,ph,_=parcel_extent(z)
     campus_margin=max(0.0,campus_buffer_ft(z)-PARCEL_BUFFER_FT)
     overview_ground=max(700,max(pw+2*campus_margin,ph+2*campus_margin)*1.15+220)
     overview_side=max(700,min(2400,overview_ground/max(.72,math.cos(math.radians(plat)))))
-    q=root/"00_CAMPUS_OVERVIEW.jpg";aerial_side(plon,plat,overview_side,q)
+    q=root/"00_CAMPUS_OVERVIEW.jpg";aerial_side(plon,plat,overview_side,q,territory=territory)
     views.append({"label":"CAMPUS OVERVIEW","path":str(q),"building":None,"lon":plon,"lat":plat,"side_ft":overview_side,"pixels":1800,"kind":"overview"})
 
     # Parcel-wide high-resolution coverage catches central plants on campuses even when building footprints are absent/wrong.
     for j,(lon,lat) in enumerate(_coverage_centers(z),1):
-        side=min(2400,1100.0/max(.72,math.cos(math.radians(lat))));q=root/f"P{j:02d}_PARCEL_TILE.jpg";aerial_side(lon,lat,side,q)
+        side=min(2400,1100.0/max(.72,math.cos(math.radians(lat))));q=root/f"P{j:02d}_PARCEL_TILE.jpg";aerial_side(lon,lat,side,q,territory=territory)
         views.append({"label":f"PARCEL TILE {j}","path":str(q),"building":None,"lon":lon,"lat":lat,"side_ft":side,"pixels":1800,"kind":"parcel_tile"})
 
     # Large-building focus views trade some field of view for much better equipment scale. The added 70-ft
@@ -410,16 +513,20 @@ def campus_images(z,root):
         if (b.get('sq') or 0)<75000:continue
         for lon,lat in building_focus_centers(b):
             fj+=1;ground=620.0;side=min(1200,ground/max(.72,math.cos(math.radians(lat))))
-            q=root/f"F{fj:02d}_{int(b.get('sq',0))}sf.jpg";aerial_side(lon,lat,side,q)
+            q=root/f"F{fj:02d}_{int(b.get('sq',0))}sf.jpg";aerial_side(lon,lat,side,q,territory=territory)
             views.append({"label":f"MECH FOCUS {fj} — {int(b.get('sq',0)):,} ft2","path":str(q),"building":b,"lon":lon,"lat":lat,"side_ft":side,"pixels":1800,"kind":"building_focus"})
 
     for i,b in enumerate(bs,1):
         side=max(420,min(1100,math.sqrt(max(b.get("sq") or 3000,1))*3.4))
-        q=root/f"B{i:02d}_{int(b.get('sq',0))}sf.jpg";aerial_side(b["lon"],b["lat"],side,q)
+        q=root/f"B{i:02d}_{int(b.get('sq',0))}sf.jpg";aerial_side(b["lon"],b["lat"],side,q,territory=territory)
         views.append({"label":f"BUILDING {i} — {int(b.get('sq',0)):,} ft2","path":str(q),"building":b,"lon":b["lon"],"lat":b["lat"],"side_ft":side,"pixels":1800,"kind":"building"})
 
     manifest={"app_version":APP_VERSION,"address":z.get("address","")+"","facility":z.get("facility","")+"","parcel_area_ft2":round(z.get("psq") or 0),
               "parcel_extent_ft":[round(pw),round(ph)],"attribution_buffer_ft":campus_buffer_ft(z),"prescreen_reason":z.get("pre_reason",""),
+              "detector_baseline_version":DETECTOR_BASELINE_VERSION,"data_sources":source_metadata(territory),
+              "footprint_source":z.get("source",""),"raw_property_use":z.get("raw_property_use",""),
+              "raw_classification":z.get("raw_classification",""),"assessment_matched":z.get("assessment_matched"),
+              "captured_at":datetime.now().astimezone().isoformat(timespec="seconds"),
               "views":[{k:v.get(k) for k in ("label","path","lon","lat","side_ft","pixels","kind")} for v in views]}
     (root/'view_manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
     return views
@@ -429,7 +536,8 @@ from datetime import datetime
 from PIL import Image,ImageTk,ImageDraw
 import numpy as np
 
-APP_VERSION='0.11.7'
+APP_VERSION='0.11.8'
+DETECTOR_BASELINE_VERSION='0.11.7'
 CANDIDATE_THRESHOLD=0.07
 TOWER_CHILLER_THRESHOLD=0.35
 LARGE_PACKAGED_THRESHOLD=0.45
@@ -1119,14 +1227,37 @@ def reconcile_cross_property_detections(records):
         r['cv'].setdefault('cross_property_rejected',0);r['cv'].setdefault('cross_property_rejected_detections',[])
     return sum(len(v) for v in removals.values())
 
+def csv_source_fields(z):
+    territory=z.get('territory') or 'virginia_beach';profile=get_profile(territory)
+    return {'app_version':APP_VERSION,'detector_baseline_version':DETECTOR_BASELINE_VERSION,
+            'territory':territory,'city':profile['name'],'parcel_gpin':z.get('gpin',''),
+            'longitude':z.get('lon',''),'latitude':z.get('lat',''),'zoning':z.get('zone',''),
+            'raw_property_use':z.get('raw_property_use',''),'raw_classification':z.get('raw_classification',''),
+            'assessment_source':z.get('assessment_source') or profile['assessment_label'],
+            'assessment_matched':z.get('assessment_matched',''),'footprint_source':z.get('source',''),
+            'imagery_source':profile['imagery_label']}
+
+def make_scan_metadata(sites,discovery_report=None):
+    keys=sorted({z.get('territory') or 'virginia_beach' for z in sites})
+    return {'app_version':APP_VERSION,'detector_baseline_version':DETECTOR_BASELINE_VERSION,
+            'model_pipeline_version':'0.0.12','started_at':datetime.now().astimezone().isoformat(timespec='seconds'),
+            'state':'started','properties_requested':len(sites),'data_sources':[source_metadata(k) for k in keys],
+            'primary_thresholds':{'candidate':CANDIDATE_THRESHOLD,'tower_chiller':TOWER_CHILLER_THRESHOLD,
+                                  'large_packaged':LARGE_PACKAGED_THRESHOLD},
+            'rescue_candidate_thresholds':{'shifted':DEEP_RESCUE_CANDIDATE_THRESHOLD,'zoomed':PERIMETER_RESCUE_CANDIDATE_THRESHOLD},
+            'discovery':dict(discovery_report or {})}
+
 class DetailWindow:
     def __init__(self,parent,z):
         w=tk.Toplevel(parent);w.title(f"Prospect Detail — {z.get('facility') or z.get('address')}");w.geometry('900x650')
         txt=tk.Text(w,wrap='word',font=('Segoe UI',10));txt.pack(fill='both',expand=True,padx=10,pady=10)
-        lines=[f"FACILITY: {z.get('facility','')}",f"ADDRESS: {z.get('address','')}",f"CV: {z.get('cv_status','NOT SCANNED')}",
+        lines=[f"CITY: {z.get('city') or 'Virginia Beach'}",f"FACILITY: {z.get('facility','')}",f"ADDRESS: {z.get('address','')}",f"CV: {z.get('cv_status','NOT SCANNED')}",
                f"OPPORTUNITY SCORE: {z.get('cv_score','')}",f"MODEL EVIDENCE HITS: {z.get('cv_equipment','')}",
                f"MAX HIGH-VALUE PROBABILITY: {'' if z.get('cv_max_prob') is None else str(round(100*z['cv_max_prob']))+'%'}",
                f"GIS TIER / SCORE: {z.get('tier','')} / {z.get('score','')}",f"LAND USE: {z.get('land','')}",f"PRESCREEN: {z.get('pre_reason','')}",
+               f"RAW PROPERTY USE: {z.get('raw_property_use','')}",f"RAW ASSESSMENT CLASS: {z.get('raw_classification','')}",
+               f"ASSESSMENT SOURCE / MATCH: {z.get('assessment_source','')} / {z.get('assessment_matched','')}",
+               f"IMAGERY: {z.get('imagery_source','')}",
                f"LARGEST BUILDING: {z.get('largest') or 'UNKNOWN'} ft²",f"AVG BUILDING: {z.get('avg') or 'UNKNOWN'} ft²",f"BUILDINGS: {z.get('count',0)}",f"DISTANCE: {z.get('distance','')} mi",f"USER REVIEW: {z.get('review_status','')}",f"NOTE: {z.get('review_note','')}",
                '',"Model evidence is geographically de-duplicated across views, but remains prospecting evidence rather than an engineering inventory.",
                "QUIET does not prove no valuable mechanical opportunity exists."]
@@ -1134,16 +1265,19 @@ class DetailWindow:
 
 class App:
     def __init__(self,r):
-        self.r=r;self.rows=[];self.cv=None;self.scan_running=False;self.last_scan_root=None;self.review_csv_path=None
-        r.title('HVAC Territory Discovery v0.11.7 — Diagnostic Calibration');r.geometry('1820x930')
+        self.r=r;self.rows=[];self.cv=None;self.scan_running=False;self.discovery_running=False;self.last_scan_root=None;self.review_csv_path=None
+        self.active_territory='norfolk';self.discovery_report={}
+        r.title(f'HVAC Territory Discovery v{APP_VERSION} — Norfolk + Virginia Beach');r.geometry('1820x930')
         t=ttk.Frame(r,padding=10);t.pack(fill='x')
-        ttk.Label(t,text='Virginia Beach center:').grid(row=0,column=0);self.q=tk.StringVar(value='717 General Booth Blvd');ttk.Entry(t,textvariable=self.q,width=36).grid(row=0,column=1,padx=5)
-        ttk.Label(t,text='Radius mi:').grid(row=0,column=2);self.rad=tk.StringVar(value='1.0');ttk.Entry(t,textvariable=self.rad,width=6).grid(row=0,column=3)
-        ttk.Label(t,text='Size threshold ft²:').grid(row=0,column=4);self.mn=tk.StringVar(value='10000');ttk.Entry(t,textvariable=self.mn,width=8).grid(row=0,column=5)
-        self.discb=ttk.Button(t,text='1. Discover + Prescreen',command=self.start);self.discb.grid(row=0,column=6,padx=8)
-        self.scanb=ttk.Button(t,text='2. Analyze Prescreened',command=self.analyze_prescreened);self.scanb.grid(row=0,column=7,padx=5)
-        ttk.Button(t,text='Open Existing Scan',command=self.load_existing_scan).grid(row=0,column=8,padx=8)
-        self.st=tk.StringVar(value='v0.11.7 diagnostic calibration — frozen v0.0.12 CV.');ttk.Label(r,textvariable=self.st).pack(fill='x',padx=10)
+        ttk.Label(t,text='City:').grid(row=0,column=0);self.city=tk.StringVar(value='Norfolk')
+        self.cityb=ttk.Combobox(t,textvariable=self.city,values=[p['name'] for p in PROFILES.values()],state='readonly',width=17);self.cityb.grid(row=0,column=1,padx=5);self.cityb.bind('<<ComboboxSelected>>',self.change_city)
+        ttk.Label(t,text='Center address:').grid(row=0,column=2);self.q=tk.StringVar(value=get_profile('norfolk')['default_address']);self.qentry=ttk.Entry(t,textvariable=self.q,width=31);self.qentry.grid(row=0,column=3,padx=5)
+        ttk.Label(t,text='Radius mi:').grid(row=0,column=4);self.rad=tk.StringVar(value='0.5');self.radentry=ttk.Entry(t,textvariable=self.rad,width=6);self.radentry.grid(row=0,column=5)
+        ttk.Label(t,text='Size threshold ft²:').grid(row=0,column=6);self.mn=tk.StringVar(value='10000');self.mnentry=ttk.Entry(t,textvariable=self.mn,width=8);self.mnentry.grid(row=0,column=7)
+        self.discb=ttk.Button(t,text='1. Discover + Prescreen',command=self.start);self.discb.grid(row=0,column=8,padx=8)
+        self.scanb=ttk.Button(t,text='2. Analyze Prescreened',command=self.analyze_prescreened);self.scanb.grid(row=0,column=9,padx=5)
+        self.openb=ttk.Button(t,text='Open Existing Scan',command=self.load_existing_scan);self.openb.grid(row=0,column=10,padx=8)
+        self.st=tk.StringVar(value=f'v{APP_VERSION} Norfolk expansion — v{DETECTOR_BASELINE_VERSION} detection/triage unchanged; frozen v0.0.12 models.');ttk.Label(r,textvariable=self.st).pack(fill='x',padx=10)
         cols=('rank','facility','address','cv','opp','evidence','maxp','review','note','largest','bldgs','mi','land','tier','pre','prewhy','gis','source')
         heads={'rank':'#','facility':'FACILITY','address':'ADDRESS','cv':'TRIAGE','opp':'OPP','evidence':'MECHANICAL EVIDENCE','maxp':'MAX P','review':'USER','note':'NOTE','largest':'LARGEST','bldgs':'BLDGS','mi':'MI','land':'LAND USE','tier':'GIS TIER','pre':'PRE','prewhy':'PRESCREEN REASON','gis':'GIS','source':'FOOTPRINT'}
         widths=(42,205,170,72,52,245,55,72,150,82,48,48,145,65,42,170,48,85)
@@ -1161,18 +1295,45 @@ class App:
         ttk.Separator(f,orient='vertical').pack(side='left',fill='y',padx=6);ttk.Button(f,text='Download Aerial',command=self.download_aerial).pack(side='left')
         ttk.Button(f,text='Save Campus Images',command=self.save_campus).pack(side='left',padx=6);ttk.Button(f,text='Copy Address',command=self.copy_address).pack(side='left',padx=6)
 
+    def set_busy(self,busy):
+        state='disabled' if busy else 'normal'
+        for widget in (self.discb,self.scanb,self.selb,self.openb,self.qentry,self.radentry,self.mnentry):widget.config(state=state)
+        self.cityb.config(state='disabled' if busy else 'readonly')
+    def change_city(self,event=None):
+        if self.scan_running or self.discovery_running:
+            self.city.set(get_profile(self.active_territory)['name']);return
+        self.active_territory=next(k for k,p in PROFILES.items() if p['name']==self.city.get())
+        profile=get_profile(self.active_territory);self.q.set(profile['default_address']);self.rad.set(profile['default_radius'])
+        self.rows=[];self.discovery_report={};self.last_scan_root=None;self.review_csv_path=None;self.refresh()
+        self.st.set(f"{profile['name']} selected | {profile['imagery_label']} | detection/triage frozen at v{DETECTOR_BASELINE_VERSION}.")
     def start(self):
-        if self.scan_running:return
-        self.discb.config(state='disabled');self.st.set('Querying GIS and applying precision-weighted prescreen...');threading.Thread(target=self.work,daemon=True).start()
-    def work(self):
+        if self.scan_running or self.discovery_running:return
         try:
-            x,y=geocode(self.q.get().strip());self.rows,np_,nb,nj,src,errs=discover(x,y,float(self.rad.get()),float(self.mn.get()));self.diag=(np_,nb,nj,src,errs)
-            for z in self.rows:z.update(cv_status='',cv_score=None,cv_equipment='',cv_max_prob=None,cv_folder='',review_status='',review_note='')
-            self.r.after(0,self.show)
+            query=self.q.get().strip();radius=float(self.rad.get());minimum=float(self.mn.get());territory=self.active_territory
+            if not query:raise ValueError('Enter a search-center address.')
+            if not math.isfinite(radius) or radius<=0:raise ValueError('Radius must be a positive number.')
+            if not math.isfinite(minimum) or minimum<0:raise ValueError('Size threshold must be a nonnegative number.')
+        except Exception as e:messagebox.showerror('Discovery settings',str(e));return
+        self.discovery_running=True;self.set_busy(True);self.st.set(f'Querying {get_profile(territory)["name"]} GIS and applying prescreen...')
+        threading.Thread(target=self.work,args=(query,radius,minimum,territory),daemon=True).start()
+    def work(self,query,radius,minimum,territory):
+        try:
+            x,y=geocode(query,territory);report={'center_address':query};result=discover(x,y,radius,minimum,territory,report)
+            self.r.after(0,lambda result=result,report=report:self.discovery_done(result,report))
         except Exception as e:self.r.after(0,lambda e=e:self.fail(e))
+    def discovery_done(self,result,report):
+        self.rows,np_,nb,nj,src,errs=result;self.diag=(np_,nb,nj,src,errs);self.discovery_report=report
+        self.last_scan_root=None;self.review_csv_path=None
+        for z in self.rows:z.update(cv_status='',cv_score=None,cv_equipment='',cv_max_prob=None,cv_folder='',review_status='',review_note='')
+        self.show()
     def show(self):
-        self.refresh();pre=sum(bool(z.get('pre')) for z in self.rows);np_,nb,nj,src,errs=self.diag;warn=(' | fallback: '+errs[0][:70]) if errs and src!='VB CITY' else ''
-        self.st.set(f'{len(self.rows)} discovered | {pre} pass prescreen | parcels {np_} | footprints {nb} | joined {nj} | {src}{warn}');self.discb.config(state='normal')
+        self.refresh();pre=sum(bool(z.get('pre')) for z in self.rows);np_,nb,nj,src,errs=self.diag;warn=(' | warning: '+errs[0][:110]) if errs else ''
+        limit=''
+        if self.discovery_report.get('truncated'):
+            omitted=self.discovery_report['prescreen_pass_before_limit']-pre
+            limit=f' | 250-row cap: {omitted} passing sites omitted; reduce radius' if omitted else f' | 250-row cap: all {pre} passing sites retained; filtered rows omitted'
+        self.st.set(f'{get_profile(self.active_territory)["name"]} | {len(self.rows)} discovered | {pre} pass prescreen | parcels {np_} | footprints {nb} | joined {nj} | {src}{warn}{limit}')
+        self.discovery_running=False;self.set_busy(False)
     def refresh(self):
         def k(z):
             s=z.get('cv_status','');rank={'STRONG':0,'REVIEW':1,'SURFACE':1,'QUIET':2,'ERROR':3,'':4}.get(s,4)
@@ -1182,7 +1343,8 @@ class App:
         for n,z in enumerate(self.rows,1):
             mp='' if z.get('cv_max_prob') is None else f"{100*z['cv_max_prob']:.0f}%";opp='' if z.get('cv_score') is None else z['cv_score'];largest='UNKNOWN' if z.get('largest') is None else f"{int(z['largest']):,}"
             self.tree.insert('', 'end', iid=str(n-1), values=(z.get('scan_index') or n,z.get('facility',''),z.get('address',''),z.get('cv_status',''),opp,z.get('cv_equipment',''),mp,z.get('review_status',''),z.get('review_note',''),largest,z.get('count',0),z.get('distance',''),z.get('land',''),z.get('tier',''),'YES' if z.get('pre') else 'NO',z.get('pre_reason',''),z.get('score',''),z.get('source','')))
-    def fail(self,e):self.st.set('Failed: '+repr(e));self.discb.config(state='normal')
+    def fail(self,e):
+        self.st.set('Failed: '+repr(e));self.discovery_running=False;self.set_busy(False);messagebox.showerror('Discovery failed',str(e))
     def sel(self):
         s=self.tree.selection()
         if not s:messagebox.showinfo('Select','Select a candidate.');return None
@@ -1191,25 +1353,33 @@ class App:
         if self.cv is None:self.cv=LocalCV(lambda msg:self.r.after(0,lambda msg=msg:self.st.set(msg)))
         return self.cv
     def analyze_prescreened(self):
-        if self.scan_running:return
+        if self.scan_running or self.discovery_running:return
         q=[z for z in self.rows if z.get('pre')]
         if not q:messagebox.showinfo('Analyze','Run discovery first; no prescreened properties are available.');return
         self.begin_scan(q)
     def analyze_selected(self):
-        if self.scan_running:return
+        if self.scan_running or self.discovery_running:return
         z=self.sel()
         if z:self.begin_scan([z])
     def begin_scan(self,sites):
-        self.scan_running=True;self.scanb.config(state='disabled');self.selb.config(state='disabled');threading.Thread(target=self.scan_worker,args=(list(sites),),daemon=True).start()
+        if any(not z.get('rings') for z in sites):messagebox.showinfo('Saved Scan','Run fresh discovery before analyzing. Saved CSVs do not contain the parcel/building geometry needed for accurate attribution.');return
+        self.scan_running=True;self.set_busy(True);threading.Thread(target=self.scan_worker,args=(list(sites),),daemon=True).start()
     def _finalize_scan_record(self,record):
         z=record['z'];cv=record['cv'];folder=record['folder'];n=record['scan_index']
         z['cv_status']=triage_status(z,cv);z['cv_score']=opportunity_score(z,cv,z['cv_status']);z['cv_equipment']=hit_text(cv,z);z['cv_max_prob']=cv['max_prob'];z['cv_folder']=str(folder);z['scan_index']=n
         cv['triage_status']=z['cv_status'];cv['opportunity_score']=z['cv_score'];cv['evidence_text']=z['cv_equipment'];cv['prescreen_reason']=z.get('pre_reason','');cv['attribution_buffer_ft']=campus_buffer_ft(z)
+        cv.update(app_version=APP_VERSION,detector_baseline_version=DETECTOR_BASELINE_VERSION,
+                  data_sources=source_metadata(z.get('territory') or 'virginia_beach'),
+                  footprint_source=z.get('source',''),raw_property_use=z.get('raw_property_use',''),
+                  raw_classification=z.get('raw_classification',''),assessment_matched=z.get('assessment_matched'))
         (folder/'cv_result.json').write_text(json.dumps(cv,indent=2,default=float),encoding='utf-8')
-        return {'scan_index':n,'facility':z.get('facility',''),'address':z.get('address',''),'cv_status':z['cv_status'],'opportunity_score':z['cv_score'],'model_evidence_hits':z['cv_equipment'],'max_high_value_probability':round(cv['max_prob'],4),'stage1_proposals':cv['stage1_proposals'],'stage1_rescue_proposals':cv.get('stage1_rescue_proposals',0),'deep_rescue_tiles':cv.get('deep_rescue_tiles',0),'deep_rescue_verified':cv.get('deep_rescue_verified',0),'perimeter_rescue_proposals':cv.get('perimeter_rescue_proposals',0),'perimeter_rescue_tiles':cv.get('perimeter_rescue_tiles',0),'perimeter_rescue_verified':cv.get('perimeter_rescue_verified',0),'perimeter_rescue_evidence':cv.get('perimeter_rescue_evidence',0),'thermal_rescue_evidence':cv.get('thermal_rescue_evidence',0),'thermal_review_only_evidence':cv.get('thermal_review_only_evidence',0),'raw_retained_evidence':cv.get('raw_retained_evidence',cv['retained_evidence']),'retained_evidence':cv['retained_evidence'],'outside_parcel_rejected':cv.get('attribution_rejected',0),'neighbor_assigned_evidence':cv.get('cross_property_rejected',0),'gis_score':z.get('score',''),'gis_tier':z.get('tier',''),'prescreen':z.get('pre',False),'prescreen_reason':z.get('pre_reason',''),'largest_building_ft2':z.get('largest',''),'avg_building_ft2':z.get('avg',''),'building_count':z.get('count',0),'land_use':z.get('land',''),'distance_miles':z.get('distance',''),'user_review':z.get('review_status',''),'user_note':z.get('review_note',''),'reviewed_at':'','result_folder':str(folder)}
+        return {'scan_index':n,'facility':z.get('facility',''),'address':z.get('address',''),'cv_status':z['cv_status'],'opportunity_score':z['cv_score'],'model_evidence_hits':z['cv_equipment'],'max_high_value_probability':round(cv['max_prob'],4),'stage1_proposals':cv['stage1_proposals'],'stage1_rescue_proposals':cv.get('stage1_rescue_proposals',0),'deep_rescue_tiles':cv.get('deep_rescue_tiles',0),'deep_rescue_verified':cv.get('deep_rescue_verified',0),'perimeter_rescue_proposals':cv.get('perimeter_rescue_proposals',0),'perimeter_rescue_tiles':cv.get('perimeter_rescue_tiles',0),'perimeter_rescue_verified':cv.get('perimeter_rescue_verified',0),'perimeter_rescue_evidence':cv.get('perimeter_rescue_evidence',0),'thermal_rescue_evidence':cv.get('thermal_rescue_evidence',0),'thermal_review_only_evidence':cv.get('thermal_review_only_evidence',0),'raw_retained_evidence':cv.get('raw_retained_evidence',cv['retained_evidence']),'retained_evidence':cv['retained_evidence'],'outside_parcel_rejected':cv.get('attribution_rejected',0),'neighbor_assigned_evidence':cv.get('cross_property_rejected',0),'gis_score':z.get('score',''),'gis_tier':z.get('tier',''),'prescreen':z.get('pre',False),'prescreen_reason':z.get('pre_reason',''),'largest_building_ft2':z.get('largest',''),'avg_building_ft2':z.get('avg',''),'building_count':z.get('count',0),'land_use':z.get('land',''),'distance_miles':z.get('distance',''),'user_review':z.get('review_status',''),'user_note':z.get('review_note',''),'reviewed_at':'','result_folder':str(folder),**csv_source_fields(z)}
     def scan_worker(self,sites):
         stamp=datetime.now().strftime('%Y%m%d_%H%M%S');root=Path.home()/'Downloads'/f'HVAC_Prospecting_Scan_{stamp}';root.mkdir(parents=True,exist_ok=True);self.last_scan_root=root;self.review_csv_path=root/'prospecting_results.csv';rows=[];records=[]
         try:
+            metadata=make_scan_metadata(sites,self.discovery_report)
+            (root/'SCAN_METADATA.json').write_text(json.dumps(metadata,indent=2),encoding='utf-8')
+            (root/'DISCOVERY_AUDIT.json').write_text(json.dumps({'discovery':self.discovery_report,'properties':self.rows},indent=2,default=float),encoding='utf-8')
             eng=self.engine()
             for n,z in enumerate(sites,1):
                 fac=z.get('facility') or z.get('address') or f'site_{n}';folder=root/f"{n:03d}_{safe_name(fac+'_'+(z.get('address') or ''))[:100]}"
@@ -1218,14 +1388,29 @@ class App:
                 record={'z':z,'cv':cv,'folder':folder,'scan_index':n};records.append(record);rows.append(self._finalize_scan_record(record))
                 self.write_csv(root,rows);self.r.after(0,self.refresh)
             reassigned=reconcile_cross_property_detections(records);rows=[self._finalize_scan_record(r) for r in records];self.write_csv(root,rows);self.r.after(0,self.refresh)
-            strong=sum(r['cv_status']=='STRONG' for r in rows);review=sum(r['cv_status']=='REVIEW' for r in rows);surf=strong+review;quiet=sum(r['cv_status']=='QUIET' for r in rows);(root/'SCAN_SUMMARY.txt').write_text(f'HVAC Territory Discovery v0.11.7\nFrozen detector pipeline v0.0.12\nPrimary thresholds 0.07 / 0.35 / 0.45\nParcel buffer: {PARCEL_BUFFER_FT:.0f} ft\n\nProperties analyzed: {len(rows)}\nSTRONG: {strong}\nREVIEW: {review}\nSurfaced total: {surf}\nQUIET: {quiet}\nNeighbor-assigned duplicate evidence: {reassigned}\n\nMechanical evidence is geographically de-duplicated across views and properties. Outside-parcel and context-rejected detections do not rank the property. v0.11.7 calibrates package context, rescue distance, compact rooftop-tower ambiguity, and bounded strategic-site near misses while retaining raw audit evidence.\n',encoding='utf-8')
+            strong=sum(r['cv_status']=='STRONG' for r in rows);review=sum(r['cv_status']=='REVIEW' for r in rows);surf=strong+review;quiet=sum(r['cv_status']=='QUIET' for r in rows)
+            metadata.update(state='completed',completed_at=datetime.now().astimezone().isoformat(timespec='seconds'),properties_analyzed=len(rows),strong=strong,review=review,quiet=quiet,neighbor_assigned_evidence=reassigned)
+            (root/'SCAN_METADATA.json').write_text(json.dumps(metadata,indent=2),encoding='utf-8')
+            city_names=', '.join(s['city'] for s in metadata['data_sources'])
+            (root/'SCAN_SUMMARY.txt').write_text(
+                f'HVAC Territory Discovery v{APP_VERSION}\nCities: {city_names}\nDetection/triage baseline: v{DETECTOR_BASELINE_VERSION} (unchanged)\n'
+                f'Frozen detector pipeline v0.0.12\nPrimary thresholds 0.07 / 0.35 / 0.45\nParcel buffer: {PARCEL_BUFFER_FT:.0f} ft\n\n'
+                f'Properties analyzed: {len(rows)}\nSTRONG: {strong}\nREVIEW: {review}\nSurfaced total: {surf}\nQUIET: {quiet}\nNeighbor-assigned duplicate evidence: {reassigned}\n\n'
+                'v0.11.8 adds Norfolk data adapters, city selection, imagery validation, and source auditing. It does not change detector weights, thresholds, rescue paths, or triage.\n'
+                'See SCAN_METADATA.json for discovery coverage/candidate limits and data sources, and DISCOVERY_AUDIT.json for prescreened and filtered displayed candidates.\n'
+                'Mechanical evidence is geographically de-duplicated across views and properties. Outside-parcel and context-rejected detections do not rank the property.\n'
+                'QUIET does not prove that valuable equipment is absent. Imagery age, shadows, roof displacement, GIS completeness, and hidden equipment can affect detection.\n',encoding='utf-8')
             self.r.after(0,lambda:self.st.set(f'Scan complete: {strong} STRONG + {review} REVIEW / {len(rows)} | {root}'));self.r.after(0,lambda:messagebox.showinfo('Scan Complete',f'Analyzed {len(rows)} properties.\nSTRONG {strong} | REVIEW {review} | QUIET {quiet}.\n\nResults:\n{root}'))
         except Exception as e:
             detail=traceback.format_exc()
             try:
+                metadata.update(state='failed',properties_analyzed=len(rows),error=str(e))
+                (root/'SCAN_METADATA.json').write_text(json.dumps(metadata,indent=2),encoding='utf-8')
+            except Exception:pass
+            try:
                 diag=Path.home()/'Downloads'/'HVAC_CV_ERROR.txt'
                 diag.write_text(
-                    'HVAC Territory Discovery v0.11.7\n\n'+detail+
+                    f'HVAC Territory Discovery v{APP_VERSION}\n\n'+detail+
                     '\nExecutable: '+str(sys.executable)+
                     '\n_MEIPASS: '+str(getattr(sys,'_MEIPASS',None))+
                     '\nCandidate asset: '+str(resource_path('models','candidate.pt'))+
@@ -1238,11 +1423,12 @@ class App:
                 popup=str(e)+'\n\n'+detail
             self.r.after(0,lambda popup=popup:self.st.set('CV scan failed. See HVAC_CV_ERROR.txt in Downloads.'))
             self.r.after(0,lambda popup=popup:messagebox.showerror('CV Scan Failed',popup))
-        finally:self.scan_running=False;self.r.after(0,lambda:self.scanb.config(state='normal'));self.r.after(0,lambda:self.selb.config(state='normal'))
+        finally:self.scan_running=False;self.r.after(0,lambda:self.set_busy(False))
     def _num(self,v,kind=float):
         try:return kind(v) if str(v).strip() else None
         except:return None
     def load_existing_scan(self):
+        if self.scan_running or self.discovery_running:return
         root=filedialog.askdirectory(title='Select HVAC_Prospecting_Scan folder')
         if not root:return
         root=Path(root);csvp=root/'prospecting_results.csv'
@@ -1258,9 +1444,18 @@ class App:
                              'cv_max_prob':self._num(r.get('max_high_value_probability')),'cv_folder':str(folder) if folder else '',
                              'score':self._num(r.get('gis_score'),int) or 0,'tier':r.get('gis_tier',''),'pre':str(r.get('prescreen','')).lower() in ('true','1','yes'),
                              'pre_reason':r.get('prescreen_reason',''),'largest':self._num(r.get('largest_building_ft2'),int),'avg':self._num(r.get('avg_building_ft2'),int),'count':self._num(r.get('building_count'),int) or 0,
-                             'land':r.get('land_use',''),'distance':self._num(r.get('distance_miles')) or '','source':'SAVED SCAN',
-                             'review_status':r.get('user_review',''),'review_note':r.get('user_note','')})
-            self.rows=rows;self.last_scan_root=root;self.review_csv_path=csvp;self.refresh()
+                             'land':r.get('land_use',''),'distance':self._num(r.get('distance_miles')) or '','source':r.get('footprint_source') or 'SAVED SCAN',
+                             'review_status':r.get('user_review',''),'review_note':r.get('user_note',''),
+                             'territory':r.get('territory') or 'virginia_beach','city':r.get('city') or 'Virginia Beach',
+                             'gpin':r.get('parcel_gpin',''),'lon':self._num(r.get('longitude')),'lat':self._num(r.get('latitude')),
+                             'zone':r.get('zoning',''),'raw_property_use':r.get('raw_property_use',''),
+                             'raw_classification':r.get('raw_classification',''),'assessment_source':r.get('assessment_source',''),
+                             'assessment_matched':r.get('assessment_matched',''),'imagery_source':r.get('imagery_source','')})
+            keys={z['territory'] for z in rows}
+            if len(keys)==1 and next(iter(keys)) in PROFILES:
+                self.active_territory=next(iter(keys));self.city.set(get_profile(self.active_territory)['name'])
+                self.q.set(get_profile(self.active_territory)['default_address']);self.rad.set(get_profile(self.active_territory)['default_radius'])
+            self.rows=rows;self.discovery_report={};self.last_scan_root=root;self.review_csv_path=csvp;self.refresh()
             done=sum(bool(z.get('review_status')) for z in rows);self.st.set(f'Loaded existing scan: {len(rows)} properties | {done} reviewed | {root}')
         except Exception as e:messagebox.showerror('Open Existing Scan',repr(e))
     def _save_review(self,z):
@@ -1306,7 +1501,7 @@ class App:
         if z.get('lon') is None or z.get('lat') is None:messagebox.showinfo('Saved Scan','Map coordinates are not stored in older scan CSVs. Use Open Scan Folder for the saved aerials.');return
         out=Path.home()/'Downloads'/f"HVAC_{safe_name(z.get('address') or 'candidate')}.jpg";self.st.set('Downloading aerial...')
         def w():
-            try:aerial(z['lon'],z['lat'],z.get('largest'),out);self.r.after(0,lambda:self.st.set('Saved '+str(out)))
+            try:aerial(z['lon'],z['lat'],z.get('largest'),out,z.get('territory') or 'virginia_beach');self.r.after(0,lambda:self.st.set('Saved '+str(out)))
             except Exception as e:self.r.after(0,lambda e=e:self.st.set('Download failed: '+repr(e)))
         threading.Thread(target=w,daemon=True).start()
     def save_campus(self):
