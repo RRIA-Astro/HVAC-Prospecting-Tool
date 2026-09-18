@@ -13,6 +13,14 @@ from release_identity import release_identity
 ROOT=Path(__file__).resolve().parent
 
 
+def model_asset_sha256(path):
+    """Ignore Git's CRLF checkout conversion for JSON; keep binary hashes exact."""
+    data=path.read_bytes()
+    if path.suffix.lower()=='.json':
+        data=data.replace(b'\r\n',b'\n')
+    return hashlib.sha256(data).hexdigest()
+
+
 class ReleaseContractTests(unittest.TestCase):
     def test_frozen_code_and_models_match_the_v0117_baseline(self):
         contract=json.loads((ROOT/'FROZEN_DETECTION_CONTRACT.json').read_text(encoding='utf-8'))
@@ -24,7 +32,49 @@ class ReleaseContractTests(unittest.TestCase):
         for name,value in contract['constants'].items():
             with self.subTest(constant=name):self.assertEqual(getattr(app,name),value)
         for name,digest in contract['model_assets'].items():
-            with self.subTest(asset=name):self.assertEqual(hashlib.sha256((ROOT/'models'/name).read_bytes()).hexdigest(),digest)
+            with self.subTest(asset=name):self.assertEqual(model_asset_sha256(ROOT/'models'/name),digest)
+
+    def test_json_asset_hashes_accept_lf_crlf_and_mixed_line_endings(self):
+        contract=json.loads((ROOT/'FROZEN_DETECTION_CONTRACT.json').read_text(encoding='utf-8'))
+        with tempfile.TemporaryDirectory() as td:
+            for name,digest in contract['model_assets'].items():
+                if Path(name).suffix.lower()!='.json':continue
+                data=(ROOT/'models'/name).read_bytes().replace(b'\r\n',b'\n')
+                variants={
+                    'LF':data,
+                    'CRLF':data.replace(b'\n',b'\r\n'),
+                    'mixed':data.replace(b'\n',b'\r\n',1),
+                }
+                for ending,content in variants.items():
+                    with self.subTest(asset=name,line_endings=ending):
+                        path=Path(td)/name;path.write_bytes(content)
+                        self.assertEqual(model_asset_sha256(path),digest)
+
+    def test_json_asset_hashes_reject_value_and_other_content_changes(self):
+        original=b'{\n  "threshold": 0.35\n}\n'
+        expected=hashlib.sha256(original).hexdigest()
+        changes={
+            'value':original.replace(b'0.35',b'0.36'),
+            'value_with_CRLF':original.replace(b'0.35',b'0.36').replace(b'\n',b'\r\n'),
+            'indentation':original.replace(b'  "',b' "'),
+            'missing_final_newline':original.rstrip(b'\n'),
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'pipeline_config.json'
+            for change,content in changes.items():
+                with self.subTest(change=change):
+                    path.write_bytes(content)
+                    self.assertNotEqual(model_asset_sha256(path),expected)
+
+    def test_binary_asset_hashes_remain_byte_exact(self):
+        original=b'model\x00\xff\nweights\r\n'
+        expected=hashlib.sha256(original).hexdigest()
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'candidate.pt';path.write_bytes(original)
+            self.assertEqual(model_asset_sha256(path),expected)
+            for content in (original.replace(b'\n',b'\r\n'),original.replace(b'\r\n',b'\n'),original+b'\x00'):
+                path.write_bytes(content)
+                self.assertNotEqual(model_asset_sha256(path),expected)
 
     def test_release_identity_is_derived_from_app_version(self):
         info=release_identity();self.assertEqual(info['APP_VERSION'],app.APP_VERSION)
