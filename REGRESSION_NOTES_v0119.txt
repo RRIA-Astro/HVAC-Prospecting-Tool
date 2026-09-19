@@ -1,0 +1,51 @@
+HVAC Territory Discovery v0.11.9 — Validation Notes
+===================================================
+
+Field evidence
+--------------
+The completed Norfolk v0.11.8 control scan analyzed 76 properties. Review of the source imagery,
+view manifests, CV JSON, and result CSV separated the early false negatives into three causes:
+
+1. 441 Bank St was not an imagery or proposal miss. The tower bank was detected repeatedly at
+   total HVAC probabilities of approximately 0.83-0.99 and classified as LARGE_PACKAGED_HVAC, but
+   discarded 38-101 ft beyond the tax parcel. Every retained verifier box was on the already-joined
+   building footprint. The building footprint was 178,447 ft2 versus a 65,336-ft2 parcel.
+2. Scope Arena's six tower cells were clear in B02_45227sf.jpg, but both rescue slots were spent on
+   the 94,003-ft2 arena structure. The tower-bearing 45,227-ft2 building was never rescanned.
+3. 600 Church St had clear imagery and rescue coverage. Primary Stage 1 returned zero proposals;
+   shifted/zoomed rescue verified eight candidates but retained none. v0.11.8 did not preserve the
+   rejected proposal classes/boxes, motivating the new audit.
+
+Two additional human-reviewed controls bounded the repair. 333 Waterside Dr has nine approximately
+50-75-ton packaged units and merits REVIEW despite no retained v0.11.8 evidence. 110 W Main St is
+correctly QUIET; the visible towers serve adjoining buildings.
+
+Release logic
+-------------
+- Building-footprint ownership applies only to Norfolk, requires <=5 ft distance from a building
+  already joined to the target and <=150 ft parcel distance, and always sets review_only.
+- Ordinary parcel and campus attribution is unchanged. Far-from-target building evidence remains
+  outside, protecting the 110 W Main and Scope-neighbor controls.
+- Norfolk rescue chooses distinct buildings first. Sites >=150,000 ft2 may use three rescue views;
+  other established Virginia Beach view counts are unchanged.
+- The unverified Norfolk near-miss route requires public/institutional context, largest building
+  >=50,000 ft2, <=2 primary proposals, >=4 verified rescue candidates, and <=2 outside rejections.
+  It creates REVIEW only and does not claim an equipment class.
+- Every Stage-2-scored rescue proposal now records RETAINED or a bounded rejection reason:
+  NON_THERMAL_CLASS, THERMAL_SCORE_BELOW_REVIEW, INTERNAL_TILE_EDGE, OUTSIDE_PROPERTY, or PHYSICAL_SIZE.
+
+Regression coverage
+-------------------
+The 73-test offline suite preserves all prior Virginia Beach cases, threshold constants, source
+routing, imagery validation, build naming, checkpoint integrity, and bundle checks. New tests assert:
+
+- Scope rescue selects F01 plus the distinct B02 tower building instead of F01 plus B01.
+- Bank Street footprint-owned evidence is REVIEW-only; distant Scope/neighbor evidence is not owned.
+- 600 Church, Scope Arena, 333 Waterside, and Bank Street reach REVIEW through their bounded paths.
+- 110 W Main remains QUIET and the same near-miss counters do not affect Virginia Beach.
+- Rescue audit records survive coordinate mapping and mark retained proposals.
+
+The local scratch runtime does not include torch/torchvision/ultralytics, so full model loading and
+PyInstaller assembly remain GitHub Actions checks. The workflow validates source checkpoint archives,
+loads the actual source models, verifies source/bundled SHA256 equality, and loads the bundled models
+before publishing the Windows artifact.

@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from zipfile import BadZipFile, ZipFile
 
 import app
 from release_identity import release_identity
@@ -21,10 +22,27 @@ def model_asset_sha256(path):
     return hashlib.sha256(data).hexdigest()
 
 
+def validate_checkpoint_archive(path):
+    """Check the checkpoint's directory, tensor records, and every member's CRC."""
+    try:
+        with ZipFile(path) as archive:
+            names=archive.namelist()
+            if not any(name.endswith('/data.pkl') for name in names):
+                raise ValueError('missing PyTorch state metadata')
+            if not any('/data/' in name and not name.endswith('/') for name in names):
+                raise ValueError('missing tensor storage records')
+            damaged=archive.testzip()
+            if damaged is not None:
+                raise ValueError('damaged archive member: '+damaged)
+    except (BadZipFile,OSError,RuntimeError,ValueError) as error:
+        raise ValueError(f'Invalid model checkpoint {path}: {error}') from error
+
+
 class ReleaseContractTests(unittest.TestCase):
-    def test_frozen_code_and_models_match_the_v0117_baseline(self):
+    def test_frozen_core_models_and_v0119_logic_match_the_release_contract(self):
         contract=json.loads((ROOT/'FROZEN_DETECTION_CONTRACT.json').read_text(encoding='utf-8'))
         self.assertEqual(app.DETECTOR_BASELINE_VERSION,contract['detector_baseline_version'])
+        self.assertEqual(app.TERRITORY_LOGIC_VERSION,contract['territory_logic_version'])
         nodes={n.name:n for n in ast.parse(inspect.getsource(app)).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
         for name,digest in contract['frozen_nodes'].items():
             with self.subTest(function=name):
@@ -33,6 +51,39 @@ class ReleaseContractTests(unittest.TestCase):
             with self.subTest(constant=name):self.assertEqual(getattr(app,name),value)
         for name,digest in contract['model_assets'].items():
             with self.subTest(asset=name):self.assertEqual(model_asset_sha256(ROOT/'models'/name),digest)
+
+    def test_model_checkpoint_archives_are_complete_and_readable(self):
+        for name in ('candidate.pt','resnet18_embedder_state_fp16.pt'):
+            with self.subTest(asset=name):validate_checkpoint_archive(ROOT/'models'/name)
+
+    def test_checkpoint_validation_rejects_missing_central_directory(self):
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'truncated.pt'
+            with ZipFile(path,'w') as archive:
+                archive.writestr('fixture/data.pkl',b'state metadata')
+                archive.writestr('fixture/data/0',b'tensor bytes')
+            validate_checkpoint_archive(path)
+            path.write_bytes(path.read_bytes()[:-22])
+            with self.assertRaisesRegex(ValueError,'truncated.pt'):
+                validate_checkpoint_archive(path)
+
+    def test_checkpoint_validation_rejects_corrupt_tensor_with_intact_directory(self):
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'corrupt.pt';tensor=b'unique-tensor-bytes-for-CRC-test'
+            with ZipFile(path,'w') as archive:
+                archive.writestr('fixture/data.pkl',b'state metadata')
+                archive.writestr('fixture/data/0',tensor)
+            data=path.read_bytes();self.assertEqual(data.count(tensor),1)
+            path.write_bytes(data.replace(tensor,b'X'+tensor[1:]))
+            with self.assertRaisesRegex(ValueError,'fixture/data/0'):
+                validate_checkpoint_archive(path)
+
+    def test_checkpoint_validation_rejects_generic_zip_without_model_records(self):
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'not-a-model.pt'
+            with ZipFile(path,'w') as archive:archive.writestr('README.txt','not a checkpoint')
+            with self.assertRaisesRegex(ValueError,'missing PyTorch state metadata'):
+                validate_checkpoint_archive(path)
 
     def test_json_asset_hashes_accept_lf_crlf_and_mixed_line_endings(self):
         contract=json.loads((ROOT/'FROZEN_DETECTION_CONTRACT.json').read_text(encoding='utf-8'))
@@ -99,6 +150,11 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn('--name %APP_NAME%',workflow)
         self.assertIn('${{ env.APP_NAME }}_Windows.zip',workflow)
         self.assertIn('test_detection_logic.py test_territories.py test_release_contract.py',workflow)
+        self.assertIn('Source model loading smoke test',workflow)
+        self.assertIn('Bundled model loading smoke test',workflow)
+        self.assertIn('app.LocalCV()',workflow)
+        self.assertIn('Get-FileHash',workflow)
+        self.assertIn('MODEL_BUNDLE_BASE',workflow)
         self.assertNotIn('test_v0117_logic.py',workflow);self.assertNotIn('HVAC_Territory_Discovery_v0117',workflow)
 
 

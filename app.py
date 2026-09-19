@@ -521,7 +521,8 @@ def campus_images(z,root):
         q=root/f"B{i:02d}_{int(b.get('sq',0))}sf.jpg";aerial_side(b["lon"],b["lat"],side,q,territory=territory)
         views.append({"label":f"BUILDING {i} — {int(b.get('sq',0)):,} ft2","path":str(q),"building":b,"lon":b["lon"],"lat":b["lat"],"side_ft":side,"pixels":1800,"kind":"building"})
 
-    manifest={"app_version":APP_VERSION,"address":z.get("address","")+"","facility":z.get("facility","")+"","parcel_area_ft2":round(z.get("psq") or 0),
+    manifest={"app_version":APP_VERSION,"territory_logic_version":TERRITORY_LOGIC_VERSION,
+              "address":z.get("address","")+"","facility":z.get("facility","")+"","parcel_area_ft2":round(z.get("psq") or 0),
               "parcel_extent_ft":[round(pw),round(ph)],"attribution_buffer_ft":campus_buffer_ft(z),"prescreen_reason":z.get("pre_reason",""),
               "detector_baseline_version":DETECTOR_BASELINE_VERSION,"data_sources":source_metadata(territory),
               "footprint_source":z.get("source",""),"raw_property_use":z.get("raw_property_use",""),
@@ -536,8 +537,9 @@ from datetime import datetime
 from PIL import Image,ImageTk,ImageDraw
 import numpy as np
 
-APP_VERSION='0.11.8'
+APP_VERSION='0.11.9'
 DETECTOR_BASELINE_VERSION='0.11.7'
+TERRITORY_LOGIC_VERSION='0.11.9'
 CANDIDATE_THRESHOLD=0.07
 TOWER_CHILLER_THRESHOLD=0.35
 LARGE_PACKAGED_THRESHOLD=0.45
@@ -573,6 +575,8 @@ PACKAGE_WIDE_VIEW_MAX_BUILDING_DISTANCE_FT=5.0
 SMALL_SITE_RESCUE_MAX_BUILDING_DISTANCE_FT=45.0
 DISPLAY={'COOLING_TOWER':'Tower','AIR_COOLED_CHILLER':'Chiller','LARGE_PACKAGED_HVAC':'Large pkg'}
 PARCEL_BUFFER_FT=30.0
+NORFOLK_BUILDING_FOOTPRINT_TOLERANCE_FT=5.0
+NORFOLK_BUILDING_OWNED_MAX_PARCEL_DISTANCE_FT=150.0
 
 def safe_name(s):
     s=''.join(c if c.isalnum() or c in '-_' else '_' for c in (s or 'candidate'))
@@ -649,6 +653,21 @@ def nearest_building_distance_ft(lon,lat,z):
             best=min(best,point_poly_distance_ft(lon,lat,rings))
     return None if best>=1e29 else best
 
+def norfolk_building_owned_review(z,parcel_distance_ft,building_distance_ft):
+    """Retain an otherwise outside Norfolk detection when it lies on a joined building.
+
+    Downtown Norfolk tax parcels can divide a single physical building. The building itself was
+    joined to this property by its centroid during discovery, so equipment on that footprint is
+    useful prospecting evidence even when it is beyond the ordinary parcel buffer. This path is
+    deliberately Norfolk-only, distance-bounded, and REVIEW-only. Neighboring-building equipment
+    remains outside because its distance from every joined target footprint is greater than 5 ft.
+    """
+    if (z.get('territory') or 'virginia_beach')!='norfolk':return False
+    if parcel_distance_ft is None or building_distance_ft is None:return False
+    pd=float(parcel_distance_ft);bd=float(building_distance_ft)
+    return (pd>campus_buffer_ft(z) and pd<=NORFOLK_BUILDING_OWNED_MAX_PARCEL_DISTANCE_FT and
+            bd<=NORFOLK_BUILDING_FOOTPRINT_TOLERANCE_FT)
+
 def thermal_rescue_eligible(z):
     ctx=property_context(z);largest=z.get('largest') or 0
     poor=any(k in ctx for k in ('SINGLE FAMILY','DUPLEX','MULTI FAMILY','MULTIFAMILY','APART','CONDO','TOWN HOUSE','TOWNHOUSE',
@@ -662,7 +681,30 @@ def thermal_rescue_views(views,z):
     bviews=[v for v in views if v.get('kind') in ('building_focus','building')]
     bviews=sorted(bviews,key=lambda v:(0 if v.get('kind')=='building_focus' else 1,-(v.get('building') or {}).get('sq',0)))
     limit=2 if (z.get('largest') or 0)>=75000 else 1
-    if bviews:return bviews[:limit]
+    if (z.get('territory') or 'virginia_beach')!='norfolk':
+        if bviews:return bviews[:limit]
+        return [v for v in views if v.get('kind') in ('parcel_tile','overview')][:1]
+    # Norfolk's downtown parcels can contain several meaningful buildings. Scope Arena exposed a
+    # failure where both rescue slots repeated the largest building while the 45,227-ft2 building
+    # carrying six tower cells was never rescanned. Cover distinct buildings before repeating one.
+    if (z.get('largest') or 0)>=150000:limit=3
+    def building_key(v):
+        b=v.get('building') or {}
+        if b.get('lon') is not None and b.get('lat') is not None:
+            return (round(float(b['lon']),7),round(float(b['lat']),7),round(float(b.get('sq') or 0)))
+        return ('OBJECT',id(b))
+    distinct=[];seen=set()
+    for view in bviews:
+        key=building_key(view)
+        if key in seen:continue
+        seen.add(key);distinct.append(view)
+    meaningful_distinct=sum((v.get('building') or {}).get('sq',0)>=20000 for v in distinct)
+    limit=max(limit,min(3,meaningful_distinct))
+    selected=distinct[:limit]
+    for view in bviews:
+        if len(selected)>=limit:break
+        if view not in selected:selected.append(view)
+    if selected:return selected
     return [v for v in views if v.get('kind') in ('parcel_tile','overview')][:1]
 
 class LocalCV:
@@ -747,9 +789,27 @@ class LocalCV:
         d['parcel_distance_ft']=point_poly_distance_ft(lon,lat,z.get('rings') or [])
         d['building_distance_ft']=nearest_building_distance_ft(lon,lat,z)
         d['view_kind']=view.get('kind','')
-        allowed=campus_buffer_ft(z);d['parcel_ok']=d['parcel_distance_ft']<=allowed
-        d['attribution_scope']='PARCEL' if d['parcel_distance_ft']<=PARCEL_BUFFER_FT else ('CAMPUS ADJACENT' if d['parcel_ok'] else 'OUTSIDE')
+        allowed=campus_buffer_ft(z)
+        d['building_owned_review']=norfolk_building_owned_review(
+            z,d['parcel_distance_ft'],d['building_distance_ft'])
+        d['parcel_ok']=d['parcel_distance_ft']<=allowed or d['building_owned_review']
+        if d['parcel_distance_ft']<=PARCEL_BUFFER_FT:d['attribution_scope']='PARCEL'
+        elif d['building_owned_review']:d['attribution_scope']='BUILDING FOOTPRINT'
+        elif d['parcel_ok']:d['attribution_scope']='CAMPUS ADJACENT'
+        else:d['attribution_scope']='OUTSIDE'
+        if d['building_owned_review']:d['review_only']=True
         return d
+
+    def _record_rescue_audit(self,d,view,mode,decision):
+        audit=getattr(self,'_rescue_candidate_audit',None)
+        if audit is None:return
+        keys=('box','type','p','best_class_prob','candidate','candidate_scored_as','reject',
+              'internal_tile_edge','review_only','lon','lat','long_ft','short_ft',
+              'parcel_distance_ft','building_distance_ft','attribution_scope','building_owned_review')
+        row={k:d.get(k) for k in keys if k in d}
+        row.update(view=view.get('label',''),image=Path(view.get('path','')).name,
+                   rescue_mode=mode,decision=decision)
+        audit.append(row)
 
     def scan_image(self,view,tile_dir,z):
         path=view['path'];im=Image.open(path).convert('RGB');w,h=im.size;dets=[];outside=[];props=0
@@ -817,17 +877,24 @@ class LocalCV:
                 # REVIEW-only below.
                 scored_conf=max(cc,CANDIDATE_THRESHOLD)
                 typ,p,rej,keep,best=self.verify(tile,pb,scored_conf,Path(path).name)
-                if typ not in ('COOLING_TOWER','AIR_COOLED_CHILLER'):continue
-                if not keep and (p<THERMAL_REVIEW_THRESHOLD or best<THERMAL_REVIEW_CLASS_MIN):continue
                 edge=4.0
                 internal_edge=(pb[0]<=edge and x0>0) or (pb[1]<=edge and y0>0) or (pb[2]>=tw-edge and x0+tw<w) or (pb[3]>=th-edge and y0+th<h)
-                if internal_edge:continue
                 weak_stage1=cc<CANDIDATE_THRESHOLD
                 d={'box':(pb[0]+x0,pb[1]+y0,pb[2]+x0,pb[3]+y0),'type':typ,'p':p,'best_class_prob':best,
-                   'candidate':cc,'candidate_scored_as':scored_conf,'reject':rej,'internal_tile_edge':False,
+                   'candidate':cc,'candidate_scored_as':scored_conf,'reject':rej,'internal_tile_edge':bool(internal_edge),
                    'rescue':True,'deep_rescue':True,'review_only':bool(weak_stage1 or not keep)}
                 self._geo_detection(d,view,w,h,z)
-                if d['parcel_ok'] and 7.0<=d.get('long_ft',0)<=130.0:out.append(d)
+                if typ not in ('COOLING_TOWER','AIR_COOLED_CHILLER'):
+                    self._record_rescue_audit(d,view,'SHIFTED','NON_THERMAL_CLASS');continue
+                if not keep and (p<THERMAL_REVIEW_THRESHOLD or best<THERMAL_REVIEW_CLASS_MIN):
+                    self._record_rescue_audit(d,view,'SHIFTED','THERMAL_SCORE_BELOW_REVIEW');continue
+                if internal_edge:
+                    self._record_rescue_audit(d,view,'SHIFTED','INTERNAL_TILE_EDGE');continue
+                if not d['parcel_ok']:
+                    self._record_rescue_audit(d,view,'SHIFTED','OUTSIDE_PROPERTY');continue
+                if not 7.0<=d.get('long_ft',0)<=130.0:
+                    self._record_rescue_audit(d,view,'SHIFTED','PHYSICAL_SIZE');continue
+                self._record_rescue_audit(d,view,'SHIFTED','RETAINED');out.append(d)
         out.sort(key=lambda d:(d['p'],d['candidate']),reverse=True);keep=[]
         for d in out:
             if any(box_iou(d['box'],k['box'])>=.35 for k in keep):continue
@@ -866,14 +933,20 @@ class LocalCV:
                 verified+=1
                 scored_conf=max(cc,CANDIDATE_THRESHOLD)
                 typ,p,rej,keep,best=self.verify(tile,pb,scored_conf,Path(path).name)
-                if typ not in ('COOLING_TOWER','AIR_COOLED_CHILLER'):continue
-                if p<PERIMETER_RESCUE_MIN_P or best<PERIMETER_RESCUE_MIN_BEST:continue
                 mapped=(x0+pb[0]*tw/1024.0,y0+pb[1]*th/1024.0,x0+pb[2]*tw/1024.0,y0+pb[3]*th/1024.0)
                 d={'box':mapped,'type':typ,'p':p,'best_class_prob':best,'candidate':cc,
                    'candidate_scored_as':scored_conf,'reject':rej,'internal_tile_edge':False,
                    'rescue':True,'deep_rescue':False,'perimeter_rescue':True,'review_only':True}
                 self._geo_detection(d,view,w,h,z)
-                if d['parcel_ok'] and 7.0<=d.get('long_ft',0)<=130.0:out.append(d)
+                if typ not in ('COOLING_TOWER','AIR_COOLED_CHILLER'):
+                    self._record_rescue_audit(d,view,'ZOOMED','NON_THERMAL_CLASS');continue
+                if p<PERIMETER_RESCUE_MIN_P or best<PERIMETER_RESCUE_MIN_BEST:
+                    self._record_rescue_audit(d,view,'ZOOMED','THERMAL_SCORE_BELOW_REVIEW');continue
+                if not d['parcel_ok']:
+                    self._record_rescue_audit(d,view,'ZOOMED','OUTSIDE_PROPERTY');continue
+                if not 7.0<=d.get('long_ft',0)<=130.0:
+                    self._record_rescue_audit(d,view,'ZOOMED','PHYSICAL_SIZE');continue
+                self._record_rescue_audit(d,view,'ZOOMED','RETAINED');out.append(d)
         out.sort(key=lambda d:(d['p'],d['candidate']),reverse=True);keep=[]
         for d in out:
             if any(box_iou(d['box'],k['box'])>=.35 for k in keep):continue
@@ -897,6 +970,7 @@ class LocalCV:
 
     def scan_property(self,views,site_dir,z,progress=None):
         site_dir=Path(site_dir);ann=site_dir/'annotated';tiles=site_dir/'_tiles';ann.mkdir(parents=True,exist_ok=True);tiles.mkdir(parents=True,exist_ok=True)
+        self._rescue_candidate_audit=[]
         raw=[];outside=[];props=0;viewrows=[];rescue_props=0;rescue_tiles=0;rescue_verified=0;rescue_dets=[]
         perimeter_props=0;perimeter_tiles=0;perimeter_verified=0;perimeter_dets=[]
         try:
@@ -906,12 +980,13 @@ class LocalCV:
                 im,dets,np_,out_=self.scan_image(view,tiles,z);props+=np_
                 for d in dets:d['view']=label;d['image']=Path(path).name
                 for d in out_:d['view']=label;d['image']=Path(path).name
-                raw.extend(dets);outside.extend(out_);viewrows.append({'view':label,'image':Path(path).name,'kind':view.get('kind',''),'side_ft':round(float(view.get('side_ft') or 0),1),'stage1_proposals':np_,'retained_attributed':len(dets),'campus_adjacent':sum(d.get('attribution_scope')=='CAMPUS ADJACENT' for d in dets),'outside_parcel':len(out_)})
+                raw.extend(dets);outside.extend(out_);viewrows.append({'view':label,'image':Path(path).name,'kind':view.get('kind',''),'side_ft':round(float(view.get('side_ft') or 0),1),'stage1_proposals':np_,'retained_attributed':len(dets),'campus_adjacent':sum(d.get('attribution_scope')=='CAMPUS ADJACENT' for d in dets),'building_owned_review':sum(bool(d.get('building_owned_review')) for d in dets),'outside_parcel':len(out_)})
                 if dets or out_:
                     dr=ImageDraw.Draw(im)
                     for d in dets:
-                        x1,y1,x2,y2=d['box'];adj=d.get('attribution_scope')=='CAMPUS ADJACENT';prefix='ADJ ' if adj else ''
-                        txt=f"{prefix}{DISPLAY.get(d['type'],d['type'])} {d['p']:.2f} {d.get('long_ft',0):.0f}ft";color='orange' if adj else 'red'
+                        x1,y1,x2,y2=d['box'];adj=d.get('attribution_scope')=='CAMPUS ADJACENT';owned=bool(d.get('building_owned_review'))
+                        prefix='BLDG REVIEW ' if owned else ('ADJ ' if adj else '')
+                        txt=f"{prefix}{DISPLAY.get(d['type'],d['type'])} {d['p']:.2f} {d.get('long_ft',0):.0f}ft";color='orange' if adj or owned else 'red'
                         dr.rectangle((x1,y1,x2,y2),outline=color,width=5);dr.rectangle((x1,max(0,y1-24),x1+max(140,len(txt)*8),y1),fill=color);dr.text((x1+3,max(0,y1-21)),txt,fill='white')
                     for d in out_:
                         x1,y1,x2,y2=d['box'];txt=f"OUTSIDE PARCEL {DISPLAY.get(d['type'],d['type'])}"
@@ -964,6 +1039,10 @@ class LocalCV:
             for d in uniq:
                 if d['type'] in hits:hits[d['type']]+=1
                 maxp=max(maxp,d['p'])
+            rescue_rejection_counts={}
+            for row in self._rescue_candidate_audit:
+                decision=row.get('decision','UNKNOWN')
+                rescue_rejection_counts[decision]=rescue_rejection_counts.get(decision,0)+1
             out={'detector_status':'EVIDENCE' if uniq else 'QUIET','hits':hits,'max_prob':maxp,'stage1_proposals':props,
                  'stage1_rescue_proposals':rescue_props,'deep_rescue_tiles':rescue_tiles,'deep_rescue_verified':rescue_verified,
                  'perimeter_rescue_proposals':perimeter_props,'perimeter_rescue_tiles':perimeter_tiles,
@@ -971,6 +1050,8 @@ class LocalCV:
                  'thermal_rescue_evidence':sum(bool(d.get('rescue')) for d in uniq),
                  'thermal_review_only_evidence':sum(bool(d.get('rescue') and d.get('review_only')) for d in uniq),
                  'raw_retained_evidence':len(raw),'retained_evidence':len(uniq),'attribution_rejected':len(outside),
+                 'building_owned_review_evidence':sum(bool(d.get('building_owned_review')) for d in uniq),
+                 'rescue_candidate_audit':self._rescue_candidate_audit,'rescue_candidate_decisions':rescue_rejection_counts,
                  'cross_property_rejected':0,'cross_property_rejected_detections':[],
                  'views':viewrows,'detections':uniq,'raw_detections':raw,'outside_parcel_detections':outside}
             (site_dir/'cv_result.json').write_text(json.dumps(out,indent=2,default=float),encoding='utf-8')
@@ -1075,6 +1156,22 @@ def strategic_unverified_review(z,cv):
                                      'FEDERAL'))
     return identity and largest>=30000 and int(cv.get('stage1_proposals') or 0)>=1
 
+def norfolk_high_value_rescue_review(z,cv):
+    """Surface a bounded Norfolk public-site near miss without inventing an equipment class.
+
+    Field controls: 600 Church St and 333 Waterside Dr contain review-worthy equipment despite
+    zero primary evidence; 110 W Main St correctly stays quiet because its many proposals and
+    outside detections belong to adjoining buildings. The route is Norfolk-only, public/institutional,
+    REVIEW-only, and requires a large property plus repeated rescue candidates.
+    """
+    if (z.get('territory') or 'virginia_beach')!='norfolk':return False
+    ctx=property_context(z);largest=float(z.get('largest') or 0)
+    public=any(k in ctx for k in ('GOVERN','HOSP','MEDICAL','UNIVERS','COLLEGE','SCHOOL','PUBLIC/SEMI PUBLIC'))
+    primary=int(cv.get('stage1_proposals') or 0)
+    rescue=int(cv.get('deep_rescue_verified') or 0)+int(cv.get('perimeter_rescue_verified') or 0)
+    outside=int(cv.get('attribution_rejected') or 0)
+    return public and largest>=50000 and primary<=2 and rescue>=4 and outside<=2
+
 def thermal_evidence(cv,z):
     alltc=[d for d in cv.get('detections',[]) if d.get('type') in ('COOLING_TOWER','AIR_COOLED_CHILLER')]
     tc=[d for d in alltc if thermal_detection_rankable(z,d)]
@@ -1096,6 +1193,8 @@ def triage_status(z,cv):
     if tc:return 'REVIEW'
     ds,very_large,largeish,mid=packaged_bands(cv,z)
     package_strong=very_large>=1 or largeish>=2 or mid>=10
+    # Norfolk building-footprint ownership is a useful urban-parcel rescue, never STRONG by itself.
+    if package_strong and any(d.get('building_owned_review') for d in ds):return 'REVIEW'
     # Seam-corroborated evidence is useful enough to investigate, but not to label STRONG by itself.
     if package_strong and ds and all(d.get('internal_tile_edge') for d in ds):return 'REVIEW'
     if package_strong:return 'STRONG'
@@ -1104,6 +1203,7 @@ def triage_status(z,cv):
                         (d.get('building_distance_ft') is None or d.get('building_distance_ft')<=1.0) and
                         d.get('view_kind') in ('building','building_focus') for d in ds)
     if largeish>=1 or mid>=5 or (mid>=3 and max([d.get('long_ft',0) for d in ds]+[0])>=23) or single_credible:return 'REVIEW'
+    if norfolk_high_value_rescue_review(z,cv):return 'REVIEW'
     if strategic_unverified_review(z,cv):return 'REVIEW'
     return 'QUIET'
 
@@ -1130,12 +1230,17 @@ def hit_text(cv,z):
     if suppressed:q.append(f"Pkg context-rejected {suppressed}")
     adj=sum(d.get('attribution_scope')=='CAMPUS ADJACENT' for d in cv.get('detections',[]))
     if adj:q.append(f"Campus-adjacent {adj}")
+    building_owned=sum(bool(d.get('building_owned_review')) for d in cv.get('detections',[]))
+    if building_owned:q.append(f"Building-footprint review {building_owned}")
     rescue_review=sum(bool(d.get('rescue') and d.get('review_only')) for d in tc)
     if rescue_review:q.append(f"Thermal rescue review {rescue_review}")
     if cv.get('attribution_rejected'):q.append(f"Outside parcel {cv['attribution_rejected']}")
     if cv.get('cross_property_rejected'):q.append(f"Neighbor-assigned {cv['cross_property_rejected']}")
     if strategic_unverified_review(z,cv) and not tc and not ds:
         q.append(f"Strategic-site unverified proposal {int(cv.get('stage1_proposals') or 0)}")
+    if norfolk_high_value_rescue_review(z,cv) and not tc and not ds:
+        rescue=int(cv.get('deep_rescue_verified') or 0)+int(cv.get('perimeter_rescue_verified') or 0)
+        q.append(f"High-value rescue near miss {rescue}")
     return ' | '.join(q)
 
 def opportunity_score(z,cv,status=None):
@@ -1184,6 +1289,7 @@ def refresh_cv_summary(cv):
     cv['perimeter_rescue_evidence']=sum(bool(d.get('perimeter_rescue')) for d in ds)
     cv['thermal_rescue_evidence']=sum(bool(d.get('rescue')) for d in ds)
     cv['thermal_review_only_evidence']=sum(bool(d.get('rescue') and d.get('review_only')) for d in ds)
+    cv['building_owned_review_evidence']=sum(bool(d.get('building_owned_review')) for d in ds)
 
 def reconcile_cross_property_detections(records):
     """Assign a thermal detection seen from multiple property scans to one best owner.
@@ -1230,6 +1336,7 @@ def reconcile_cross_property_detections(records):
 def csv_source_fields(z):
     territory=z.get('territory') or 'virginia_beach';profile=get_profile(territory)
     return {'app_version':APP_VERSION,'detector_baseline_version':DETECTOR_BASELINE_VERSION,
+            'territory_logic_version':TERRITORY_LOGIC_VERSION,
             'territory':territory,'city':profile['name'],'parcel_gpin':z.get('gpin',''),
             'longitude':z.get('lon',''),'latitude':z.get('lat',''),'zoning':z.get('zone',''),
             'raw_property_use':z.get('raw_property_use',''),'raw_classification':z.get('raw_classification',''),
@@ -1240,6 +1347,7 @@ def csv_source_fields(z):
 def make_scan_metadata(sites,discovery_report=None):
     keys=sorted({z.get('territory') or 'virginia_beach' for z in sites})
     return {'app_version':APP_VERSION,'detector_baseline_version':DETECTOR_BASELINE_VERSION,
+            'territory_logic_version':TERRITORY_LOGIC_VERSION,
             'model_pipeline_version':'0.0.12','started_at':datetime.now().astimezone().isoformat(timespec='seconds'),
             'state':'started','properties_requested':len(sites),'data_sources':[source_metadata(k) for k in keys],
             'primary_thresholds':{'candidate':CANDIDATE_THRESHOLD,'tower_chiller':TOWER_CHILLER_THRESHOLD,
@@ -1277,7 +1385,7 @@ class App:
         self.discb=ttk.Button(t,text='1. Discover + Prescreen',command=self.start);self.discb.grid(row=0,column=8,padx=8)
         self.scanb=ttk.Button(t,text='2. Analyze Prescreened',command=self.analyze_prescreened);self.scanb.grid(row=0,column=9,padx=5)
         self.openb=ttk.Button(t,text='Open Existing Scan',command=self.load_existing_scan);self.openb.grid(row=0,column=10,padx=8)
-        self.st=tk.StringVar(value=f'v{APP_VERSION} Norfolk expansion — v{DETECTOR_BASELINE_VERSION} detection/triage unchanged; frozen v0.0.12 models.');ttk.Label(r,textvariable=self.st).pack(fill='x',padx=10)
+        self.st=tk.StringVar(value=f'v{APP_VERSION} Norfolk field-validation patch — frozen v0.0.12 models; Virginia Beach behavior preserved.');ttk.Label(r,textvariable=self.st).pack(fill='x',padx=10)
         cols=('rank','facility','address','cv','opp','evidence','maxp','review','note','largest','bldgs','mi','land','tier','pre','prewhy','gis','source')
         heads={'rank':'#','facility':'FACILITY','address':'ADDRESS','cv':'TRIAGE','opp':'OPP','evidence':'MECHANICAL EVIDENCE','maxp':'MAX P','review':'USER','note':'NOTE','largest':'LARGEST','bldgs':'BLDGS','mi':'MI','land':'LAND USE','tier':'GIS TIER','pre':'PRE','prewhy':'PRESCREEN REASON','gis':'GIS','source':'FOOTPRINT'}
         widths=(42,205,170,72,52,245,55,72,150,82,48,48,145,65,42,170,48,85)
@@ -1305,7 +1413,8 @@ class App:
         self.active_territory=next(k for k,p in PROFILES.items() if p['name']==self.city.get())
         profile=get_profile(self.active_territory);self.q.set(profile['default_address']);self.rad.set(profile['default_radius'])
         self.rows=[];self.discovery_report={};self.last_scan_root=None;self.review_csv_path=None;self.refresh()
-        self.st.set(f"{profile['name']} selected | {profile['imagery_label']} | detection/triage frozen at v{DETECTOR_BASELINE_VERSION}.")
+        logic=f'Norfolk field logic v{TERRITORY_LOGIC_VERSION}' if self.active_territory=='norfolk' else f'Virginia Beach baseline v{DETECTOR_BASELINE_VERSION}'
+        self.st.set(f"{profile['name']} selected | {profile['imagery_label']} | {logic}.")
     def start(self):
         if self.scan_running or self.discovery_running:return
         try:
@@ -1369,11 +1478,12 @@ class App:
         z['cv_status']=triage_status(z,cv);z['cv_score']=opportunity_score(z,cv,z['cv_status']);z['cv_equipment']=hit_text(cv,z);z['cv_max_prob']=cv['max_prob'];z['cv_folder']=str(folder);z['scan_index']=n
         cv['triage_status']=z['cv_status'];cv['opportunity_score']=z['cv_score'];cv['evidence_text']=z['cv_equipment'];cv['prescreen_reason']=z.get('pre_reason','');cv['attribution_buffer_ft']=campus_buffer_ft(z)
         cv.update(app_version=APP_VERSION,detector_baseline_version=DETECTOR_BASELINE_VERSION,
+                  territory_logic_version=TERRITORY_LOGIC_VERSION,
                   data_sources=source_metadata(z.get('territory') or 'virginia_beach'),
                   footprint_source=z.get('source',''),raw_property_use=z.get('raw_property_use',''),
                   raw_classification=z.get('raw_classification',''),assessment_matched=z.get('assessment_matched'))
         (folder/'cv_result.json').write_text(json.dumps(cv,indent=2,default=float),encoding='utf-8')
-        return {'scan_index':n,'facility':z.get('facility',''),'address':z.get('address',''),'cv_status':z['cv_status'],'opportunity_score':z['cv_score'],'model_evidence_hits':z['cv_equipment'],'max_high_value_probability':round(cv['max_prob'],4),'stage1_proposals':cv['stage1_proposals'],'stage1_rescue_proposals':cv.get('stage1_rescue_proposals',0),'deep_rescue_tiles':cv.get('deep_rescue_tiles',0),'deep_rescue_verified':cv.get('deep_rescue_verified',0),'perimeter_rescue_proposals':cv.get('perimeter_rescue_proposals',0),'perimeter_rescue_tiles':cv.get('perimeter_rescue_tiles',0),'perimeter_rescue_verified':cv.get('perimeter_rescue_verified',0),'perimeter_rescue_evidence':cv.get('perimeter_rescue_evidence',0),'thermal_rescue_evidence':cv.get('thermal_rescue_evidence',0),'thermal_review_only_evidence':cv.get('thermal_review_only_evidence',0),'raw_retained_evidence':cv.get('raw_retained_evidence',cv['retained_evidence']),'retained_evidence':cv['retained_evidence'],'outside_parcel_rejected':cv.get('attribution_rejected',0),'neighbor_assigned_evidence':cv.get('cross_property_rejected',0),'gis_score':z.get('score',''),'gis_tier':z.get('tier',''),'prescreen':z.get('pre',False),'prescreen_reason':z.get('pre_reason',''),'largest_building_ft2':z.get('largest',''),'avg_building_ft2':z.get('avg',''),'building_count':z.get('count',0),'land_use':z.get('land',''),'distance_miles':z.get('distance',''),'user_review':z.get('review_status',''),'user_note':z.get('review_note',''),'reviewed_at':'','result_folder':str(folder),**csv_source_fields(z)}
+        return {'scan_index':n,'facility':z.get('facility',''),'address':z.get('address',''),'cv_status':z['cv_status'],'opportunity_score':z['cv_score'],'model_evidence_hits':z['cv_equipment'],'max_high_value_probability':round(cv['max_prob'],4),'stage1_proposals':cv['stage1_proposals'],'stage1_rescue_proposals':cv.get('stage1_rescue_proposals',0),'deep_rescue_tiles':cv.get('deep_rescue_tiles',0),'deep_rescue_verified':cv.get('deep_rescue_verified',0),'perimeter_rescue_proposals':cv.get('perimeter_rescue_proposals',0),'perimeter_rescue_tiles':cv.get('perimeter_rescue_tiles',0),'perimeter_rescue_verified':cv.get('perimeter_rescue_verified',0),'perimeter_rescue_evidence':cv.get('perimeter_rescue_evidence',0),'thermal_rescue_evidence':cv.get('thermal_rescue_evidence',0),'thermal_review_only_evidence':cv.get('thermal_review_only_evidence',0),'building_owned_review_evidence':cv.get('building_owned_review_evidence',0),'raw_retained_evidence':cv.get('raw_retained_evidence',cv['retained_evidence']),'retained_evidence':cv['retained_evidence'],'outside_parcel_rejected':cv.get('attribution_rejected',0),'neighbor_assigned_evidence':cv.get('cross_property_rejected',0),'gis_score':z.get('score',''),'gis_tier':z.get('tier',''),'prescreen':z.get('pre',False),'prescreen_reason':z.get('pre_reason',''),'largest_building_ft2':z.get('largest',''),'avg_building_ft2':z.get('avg',''),'building_count':z.get('count',0),'land_use':z.get('land',''),'distance_miles':z.get('distance',''),'user_review':z.get('review_status',''),'user_note':z.get('review_note',''),'reviewed_at':'','result_folder':str(folder),**csv_source_fields(z)}
     def scan_worker(self,sites):
         stamp=datetime.now().strftime('%Y%m%d_%H%M%S');root=Path.home()/'Downloads'/f'HVAC_Prospecting_Scan_{stamp}';root.mkdir(parents=True,exist_ok=True);self.last_scan_root=root;self.review_csv_path=root/'prospecting_results.csv';rows=[];records=[]
         try:
@@ -1393,12 +1503,12 @@ class App:
             (root/'SCAN_METADATA.json').write_text(json.dumps(metadata,indent=2),encoding='utf-8')
             city_names=', '.join(s['city'] for s in metadata['data_sources'])
             (root/'SCAN_SUMMARY.txt').write_text(
-                f'HVAC Territory Discovery v{APP_VERSION}\nCities: {city_names}\nDetection/triage baseline: v{DETECTOR_BASELINE_VERSION} (unchanged)\n'
+                f'HVAC Territory Discovery v{APP_VERSION}\nCities: {city_names}\nCore detector baseline: v{DETECTOR_BASELINE_VERSION}\nTerritory logic: v{TERRITORY_LOGIC_VERSION}\n'
                 f'Frozen detector pipeline v0.0.12\nPrimary thresholds 0.07 / 0.35 / 0.45\nParcel buffer: {PARCEL_BUFFER_FT:.0f} ft\n\n'
                 f'Properties analyzed: {len(rows)}\nSTRONG: {strong}\nREVIEW: {review}\nSurfaced total: {surf}\nQUIET: {quiet}\nNeighbor-assigned duplicate evidence: {reassigned}\n\n'
-                'v0.11.8 adds Norfolk data adapters, city selection, imagery validation, and source auditing. It does not change detector weights, thresholds, rescue paths, or triage.\n'
+                'v0.11.9 retains the model weights and thresholds, preserves Virginia Beach behavior, and adds bounded Norfolk-only attribution, rescue-view, and high-value REVIEW safeguards.\n'
                 'See SCAN_METADATA.json for discovery coverage/candidate limits and data sources, and DISCOVERY_AUDIT.json for prescreened and filtered displayed candidates.\n'
-                'Mechanical evidence is geographically de-duplicated across views and properties. Outside-parcel and context-rejected detections do not rank the property.\n'
+                'Mechanical evidence is geographically de-duplicated across views and properties. Ordinary outside-parcel and context-rejected detections do not rank; Norfolk equipment on an already-joined building footprint is REVIEW-only.\n'
                 'QUIET does not prove that valuable equipment is absent. Imagery age, shadows, roof displacement, GIS completeness, and hidden equipment can affect detection.\n',encoding='utf-8')
             self.r.after(0,lambda:self.st.set(f'Scan complete: {strong} STRONG + {review} REVIEW / {len(rows)} | {root}'));self.r.after(0,lambda:messagebox.showinfo('Scan Complete',f'Analyzed {len(rows)} properties.\nSTRONG {strong} | REVIEW {review} | QUIET {quiet}.\n\nResults:\n{root}'))
         except Exception as e:

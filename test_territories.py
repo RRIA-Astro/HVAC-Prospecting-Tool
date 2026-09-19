@@ -238,6 +238,7 @@ class ImageryAndAuditTests(unittest.TestCase):
     def test_scan_metadata_identifies_frozen_baseline_and_sources(self):
         d=app.make_scan_metadata([{'territory':'norfolk'}],{'truncated':True})
         self.assertEqual(d['detector_baseline_version'],'0.11.7');self.assertEqual(d['model_pipeline_version'],'0.0.12')
+        self.assertEqual(d['territory_logic_version'],'0.11.9')
         self.assertEqual(d['data_sources'][0]['city'],'Norfolk');self.assertTrue(d['discovery']['truncated'])
 
     def test_all_campus_views_use_the_row_territory_and_manifest(self):

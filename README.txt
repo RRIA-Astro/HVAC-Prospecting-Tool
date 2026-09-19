@@ -1,5 +1,5 @@
-HVAC Territory Discovery v0.11.8 — Norfolk + Virginia Beach
-=========================================================
+HVAC Territory Discovery v0.11.9 — Norfolk Field-Validation Patch
+=================================================================
 
 Purpose
 -------
@@ -10,9 +10,25 @@ proof that valuable equipment is absent. Ambiguous evidence still requires sales
 
 What changed
 ------------
-Norfolk is now a selectable territory alongside Virginia Beach. The app starts with Norfolk
-selected, centered at 800 E City Hall Ave with a 0.5-mile radius. You can use another Norfolk
-street address. Select Virginia Beach to use its existing services and previous defaults.
+v0.11.9 applies the first Norfolk blind-scan findings without globally lowering a model threshold.
+It preserves the established Virginia Beach branch and adds three bounded Norfolk-only safeguards:
+
+  * Equipment physically on a building footprint already joined to the target can survive a split
+    downtown tax parcel, but only as REVIEW and only within 150 ft of the parcel. Equipment on an
+    adjoining building remains outside. This separates 441 Bank St from the 110 W Main St control.
+  * Rescue covers distinct meaningful buildings before repeating the largest structure. This sends
+    a rescue view to the 45,227-ft2 Scope Arena building carrying the six-cell tower bank.
+  * A large public/institutional Norfolk property with very few primary proposals, repeated rescue
+    candidates, and little outside-parcel spillover receives an honest unverified REVIEW. This
+    surfaces 600 Church St and 333 Waterside Dr without claiming a tower/chiller class.
+
+Rejected rescue candidates now remain auditable in cv_result.json with their predicted class,
+probabilities, mapped position, and rejection decision. This closes the diagnostic gap exposed by
+600 Church St. The model weights and primary/rescue thresholds are unchanged.
+
+Norfolk remains selectable alongside Virginia Beach. The app starts with Norfolk selected,
+centered at 800 E City Hall Ave with a 0.5-mile radius. Select Virginia Beach to use its existing
+services, defaults, and v0.11.7 ranking behavior.
 
 Norfolk uses city address points, parcel boundaries, building polygons, and public 2025 aerial
 imagery. Parcel GPINs join to the city's daily-updated Property Assessment and Sales FY27 data.
@@ -34,29 +50,31 @@ Norfolk uses MapServer/export; Virginia Beach retains ImageServer/exportImage. T
 rejects service error pages, wrong-sized exports, and completely blank images before inference.
 It never substitutes another city's imagery, an older year, or a lower-resolution basemap.
 
-Frozen detector contract
-------------------------
-Detection, rescue, prescreen rules, scoring, attribution, and triage remain at the v0.11.7 baseline.
-Only jurisdiction inputs/normalization, acquisition routing/validation, UI, and audit output change.
-The v0.0.12 model files are byte-for-byte unchanged. Primary operating points stay:
+Core detector and territory contract
+------------------------------------
+The v0.0.12 model files and primary operating points remain byte-for-byte unchanged from the
+v0.11.7 detector baseline. Virginia Beach rescue selection, attribution, and triage remain on that
+branch. v0.11.9 adds only the bounded Norfolk territory logic described above. Operating points stay:
 
   Stage 1 candidate: 0.07
   Tower/chiller verifier: 0.35
   Large packaged verifier: 0.45
 
-Shifted rescue retains 0.015; zoomed perimeter rescue retains 0.008. Rescue routing and REVIEW-only
-limits are unchanged. This release does not add fanless-tower recognition or tune any reviewed miss.
-FROZEN_DETECTION_CONTRACT.json protects model hashes, baseline code, and detector constants in tests.
+Shifted rescue retains 0.015; zoomed perimeter rescue retains 0.008. This release does not retrain
+fanless-tower recognition. FROZEN_DETECTION_CONTRACT.json protects model hashes, core constants,
+the preserved baseline branch, and the explicit Norfolk logic in tests.
+JSON asset hashes normalize CRLF to LF to tolerate Windows Git checkout line endings. All other
+JSON bytes remain protected, and binary .pt model assets retain strict byte-for-byte hash checks.
 Virginia Beach's service URLs and normal discovery/ranking behavior remain available unchanged.
 
-First Norfolk test
-------------------
+Norfolk validation rerun
+------------------------
 1. Build and extract the Windows artifact as usual, keeping its entire folder together.
 2. Leave Norfolk selected. Start with the 0.5-mile radius and 10,000 ft2 size setting.
 3. Click Discover + Prescreen. Inspect the city, addresses, footprint source, and warnings.
 4. Aim for about 75-100 passing properties. Shrink/expand the radius if needed, then Analyze.
-5. Assess all STRONG/REVIEW properties and spot-check QUIET sites as before. This is not a
-   statistically complete recall test without checking every target-positive property.
+5. Re-run the same 0.5-mile control area first. Confirm that 600 Church, 441 Bank, Scope Arena,
+   and 333 Waterside surface while 110 W Main stays quiet. Then move to a fresh Norfolk area.
 
 Discovery still displays at most 250 candidates, with prescreen-passing sites sorted first.
 The status line and metadata disclose when this cap is reached. Compare displayed passing sites
@@ -65,8 +83,8 @@ overlapping searches. The cap warning can also mean only filtered/nonpassing row
 The scan covers the selected city's parcel inventory only, even when a radius crosses city limits.
 
 Shadows, tall-building roof displacement relative to footprints, imagery age, GIS completeness,
-and equipment concealed by screens/penthouses can affect results. Norfolk accuracy is not yet
-field-validated. Treat the first run as a new-territory blind test, not a demonstrated accuracy claim.
+and equipment concealed by screens/penthouses can affect results. The five named controls validate
+the repair targets, not citywide accuracy; the next fresh-area run remains a blind generalization test.
 
 Output
 ------
@@ -77,6 +95,7 @@ New audit output adds:
   SCAN_METADATA.json: release/baseline, actual source URLs, scan state, discovery/cap diagnostics.
   DISCOVERY_AUDIT.json: the displayed candidates and their prescreen/assessment/footprint context.
   CSV: city/territory, GPIN, coordinates, raw use/class, assessment match, footprint/imagery source.
+  cv_result.json: rescue_candidate_audit and rescue_candidate_decisions for verified rescue proposals.
 
 Old Virginia Beach scan CSVs remain readable for review. New scan CSVs retain coordinates for
 Download Aerial. CSVs do not contain full parcel/building geometry; rediscover before reanalyzing.
@@ -93,8 +112,36 @@ The workflow reads APP_VERSION from app.py to derive the EXE/artifact names. Reg
 stable filenames and check the detector baseline separately from the app release number, avoiding
 the stale v0.11.5/v0.11.6 version assertion failures encountered previously. Node-24 actions are used.
 
-For this release the artifact is HVAC_Territory_Discovery_v0118_Windows.zip.
-Extract it and run HVAC_Territory_Discovery_v0118.exe. Keep its other bundled files intact.
+Historical v0.11.8 build-check repair: if the original build failed only on the
+pipeline_config.json and verifier_runtime.json hashes, replace test_release_contract.py at the
+repository root with this corrected copy and commit. No model, configuration, app.py, or workflow
+replacement is required for this repair. Re-running the old failed commit will use the old test.
+
+Historical v0.11.8 Stage-2 checkpoint repair: the initial Norfolk source package included a
+truncated resnet18_embedder_state_fp16.pt. This corrected package restores the complete original
+v0.11.7 checkpoint: 22,410,981 bytes; SHA256
+7dbdd679df66598a8d9e63f983507eb7900af9553595a3bb250ee6e4795e6ffd.
+The damaged copy was the exact first 22,071,296 bytes of that file, missing 339,685 trailing bytes.
+No training, weights, thresholds, or runtime detection logic were changed. The frozen contract's
+embedder hash now refers to the intact original instead of the damaged cached copy.
+
+For this repair replace FOUR files in GitHub (paths are relative to the repository root):
+  models/resnet18_embedder_state_fp16.pt
+  FROZEN_DETECTION_CONTRACT.json
+  test_release_contract.py
+  .github/workflows/build-windows.yml
+Commit the replacements and use the new build run. Uploading the model alone leaves the old hash
+check; re-running an old commit still uses its old files. The binary is below GitHub's 25 MiB web
+upload limit. Updated README, changelog, regression notes, and model card are optional documentation.
+
+The 73-test suite opens each checkpoint and verifies all archive CRCs, with regressions for
+missing central directories, corrupted tensor bytes, and generic ZIPs that are not checkpoints.
+The workflow additionally loads the actual source models before PyInstaller, compares every
+bundled asset byte-for-byte with its source, and loads the bundled assets using the same LocalCV
+initializer. These checks do not run a full detector scan or launch the packaged Windows GUI.
+
+For this release the artifact is HVAC_Territory_Discovery_v0119_Windows.zip.
+Extract it and run HVAC_Territory_Discovery_v0119.exe. Keep its other bundled files intact.
 
 Source run / offline validation (Python 3.12)
 --------------------------------------------
@@ -103,9 +150,9 @@ Source run / offline validation (Python 3.12)
   python -m unittest -v test_detection_logic.py test_territories.py test_release_contract.py
   python app.py
 
-The automated suite does not require live GIS requests or load the ML runtime. It covers frozen
-detection behavior, model/code hashes, Norfolk classifications/joins/routing, acquisition scale,
-error handling, auditing, and release packaging. Windows EXE assembly runs in GitHub Actions.
+The automated suite does not require live GIS requests or load the ML runtime. It covers preserved
+Virginia Beach behavior, model/code hashes, the five Norfolk field controls, classifications/joins,
+acquisition scale, error handling, auditing, and release packaging. Windows EXE assembly runs in GitHub Actions.
 Keep v0.10.1 as the separate training-safe labeling app.
 
 Official source references (verified 2026-09-18)

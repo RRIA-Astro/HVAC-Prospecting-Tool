@@ -52,6 +52,7 @@ class _Candidate:
 class FrozenDetectionLogicTests(unittest.TestCase):
     def test_frozen_primary_operating_points(self):
         self.assertEqual(app.DETECTOR_BASELINE_VERSION,"0.11.7")
+        self.assertEqual(app.TERRITORY_LOGIC_VERSION,"0.11.9")
         self.assertEqual((app.CANDIDATE_THRESHOLD,app.TOWER_CHILLER_THRESHOLD,app.LARGE_PACKAGED_THRESHOLD),(.07,.35,.45))
 
     def test_5925_target_is_well_inside_a_zoom_crop(self):
@@ -63,6 +64,7 @@ class FrozenDetectionLogicTests(unittest.TestCase):
 
     def test_zoom_detection_maps_back_to_source_coordinates(self):
         eng=app.LocalCV.__new__(app.LocalCV);eng.candidate=_Candidate()
+        eng._rescue_candidate_audit=[]
         eng.verify=lambda *args:("COOLING_TOWER",.90,.10,True,.80)
         with tempfile.TemporaryDirectory() as td:
             src=Path(td)/"test.jpg";Image.new("RGB",(1800,1800),"white").save(src)
@@ -73,6 +75,7 @@ class FrozenDetectionLogicTests(unittest.TestCase):
         # 1800px/512px grid centers at x=y=644; the synthetic 320..640 box maps to 804..964.
         self.assertTrue(np.allclose(ds[0]["box"],(804,804,964,964)))
         self.assertTrue(ds[0]["review_only"] and ds[0]["perimeter_rescue"])
+        self.assertEqual(eng._rescue_candidate_audit[0]["decision"],"RETAINED")
 
     def test_small_public_priority_site_receives_rescue(self):
         bs=[rectangle_building() for _ in range(10)]
@@ -101,6 +104,48 @@ class FrozenDetectionLogicTests(unittest.TestCase):
         views=[{"kind":"overview","label":"O"},{"kind":"building_focus","label":"F01","building":{"sq":138944}},
                {"kind":"building_focus","label":"F02","building":{"sq":138944}}]
         self.assertEqual([v["label"] for v in app.thermal_rescue_views(views,{"largest":138944})],["F01","F02"])
+
+    def test_norfolk_scope_rescue_covers_distinct_secondary_building(self):
+        arena={"sq":94003,"lon":-76.2869,"lat":36.8533}
+        tower_building={"sq":45227,"lon":-76.2861,"lat":36.8521}
+        views=[{"kind":"overview","label":"O"},
+               {"kind":"building_focus","label":"F01","building":arena},
+               {"kind":"building","label":"B01","building":arena},
+               {"kind":"building","label":"B02","building":tower_building}]
+        chosen=app.thermal_rescue_views(views,{"territory":"norfolk","largest":94003})
+        self.assertEqual([v["label"] for v in chosen],["F01","B02"])
+
+    def test_norfolk_bank_street_building_owned_evidence_is_review_only(self):
+        bank={"territory":"norfolk","land":"GOVERNMENT","facility":"Bank Street Garage",
+              "zone":"","fcodes":[],"count":1,"largest":178447,"buildings":[]}
+        self.assertTrue(app.norfolk_building_owned_review(bank,100.7,0.0))
+        self.assertFalse(app.norfolk_building_owned_review(bank,151,0.0))
+        self.assertFalse(app.norfolk_building_owned_review(bank,112.2,263.4))
+        self.assertFalse(app.norfolk_building_owned_review(dict(bank,territory="virginia_beach"),100.7,0.0))
+        tower_as_package=detection("LARGE_PACKAGED_HVAC",.9843,.7911,54.31,48.00,pd=99.97,bd=0,
+                                   scope="BUILDING FOOTPRINT",review=True)
+        tower_as_package["building_owned_review"]=True
+        cv={"detections":[tower_as_package],"raw_detections":[tower_as_package]}
+        self.assertTrue(app.package_rankable(bank,tower_as_package,cv))
+        self.assertEqual(app.triage_status(bank,cv),"REVIEW")
+        self.assertIn("Building-footprint review 1",app.hit_text(cv,bank))
+
+    def test_norfolk_high_value_rescue_controls(self):
+        def cv(primary,deep,zoom,outside=0):
+            return {"detections":[],"raw_detections":[],"stage1_proposals":primary,
+                    "deep_rescue_verified":deep,"perimeter_rescue_verified":zoom,
+                    "attribution_rejected":outside}
+        common={"territory":"norfolk","land":"GOVERNMENT","zone":"","fcodes":[],"buildings":[]}
+        post=dict(common,facility="Norfolk Post Office",largest=213852)
+        waterside=dict(common,facility="VIN Wine Bar",land="GOVERNMENT HOUSING AUTHORITY",largest=74459)
+        scope=dict(common,facility="Scope Arena",largest=94003)
+        adjoining=dict(common,facility="Town Point Garage",largest=53372)
+        self.assertEqual(app.triage_status(post,cv(0,6,2)),"REVIEW")
+        self.assertEqual(app.triage_status(waterside,cv(0,15,2)),"REVIEW")
+        self.assertEqual(app.triage_status(scope,cv(2,1,3,2)),"REVIEW")
+        self.assertEqual(app.triage_status(adjoining,cv(17,7,1,13)),"QUIET")
+        self.assertEqual(app.triage_status(dict(post,territory="virginia_beach"),cv(0,6,2)),"QUIET")
+        self.assertIn("High-value rescue near miss 17",app.hit_text(cv(0,15,2),waterside))
 
     def test_known_package_context_cases(self):
         z={"land":"INDUSTRIAL","buildings":[]}

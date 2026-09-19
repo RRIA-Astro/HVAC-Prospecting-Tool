@@ -1,5 +1,6 @@
 {
   "detector_baseline_version": "0.11.7",
+  "territory_logic_version": "0.11.9",
   "constants": {
     "CANDIDATE_THRESHOLD": 0.07,
     "TOWER_CHILLER_THRESHOLD": 0.35,
@@ -29,7 +30,9 @@
       "AIR_COOLED_CHILLER": "Chiller",
       "LARGE_PACKAGED_HVAC": "Large pkg"
     },
-    "PARCEL_BUFFER_FT": 30.0
+    "PARCEL_BUFFER_FT": 30.0,
+    "NORFOLK_BUILDING_FOOTPRINT_TOLERANCE_FT": 5.0,
+    "NORFOLK_BUILDING_OWNED_MAX_PARCEL_DISTANCE_FT": 150.0
   },
   "frozen_nodes": {
     "bbox": "80d612b010b78a757f09fe9f4220a97f3b32de88c2f17926b6aaa1469c6827f5",
@@ -63,8 +66,10 @@
     "softmax": "629013912c9007b259ffc726fb9ffe0cdc70e44e79fe0c05df3170c48c42bb1c",
     "nearest_building_distance_ft": "5b09f6256282c494b13827ea007a9a00b867ac32fd1f604dd2ef80ee081b8aa0",
     "thermal_rescue_eligible": "3b046d888e5c78ebf50c77057f8b124f0fffbe7f54a23af987a6de82968464c3",
-    "thermal_rescue_views": "f81935d390a2918944fbdab56527108683af9f9711d731dd7b5dcf9028e71529",
-    "LocalCV": "207782522b0c1175d4452cb4b1e1ea6a683f371e8ad1fe7ac3c14db83f8a3bbc",
+    "thermal_rescue_views": "d7e183bc760321ff7206c23be6d24a297838651103ee438718d16e6229288178",
+    "LocalCV": "d5c5c43955921c6279127b7602e610bd069f9c4fe0cf7bed164a368e5fc58b30",
+    "norfolk_building_owned_review": "136c6a96d4e642f66c9babc8ab3ffb82ce9e8b72675837bfd588546267312b17",
+    "norfolk_high_value_rescue_review": "bf5919b1e3ec9dda4e8459e77e222f2e5c07b16035aacc88ec9bface93519e6d",
     "package_same_machine": "c3546a257b5b6dbccbcb08cfcda966b102031fb24e3c4980e8eaa1eae63a38dd",
     "package_seam_corroborated": "a64b3c53c4c0c8a0561da1d2bcc4d986974f20ea4515f21622f975d06dd4b6ac",
     "package_rankable": "5e444cb538afed3d9ddd667540ce372efe711215d4a732886046faf94710f237",
@@ -73,16 +78,16 @@
     "commercial_rooftop_tower_review_only": "dc236a0c75498b877800976c2a4396725fe84d0f6447a3f2099fce31e8f0942a",
     "strategic_unverified_review": "2b6e25e9771df0375ca48b5ce0a13a798f89b7faaf673f03214884bf6e4baace",
     "thermal_evidence": "d836f801468f2c36b43965b960798dd3904ea619a6de3dcb7ee364d477983650",
-    "triage_status": "a2b475d2b3e4a956eaf07456a4f32aafad12ede515f21f03122753918153a684",
-    "hit_text": "0c973c0d3b5a8346c9cb6923a663d675a2960c414e40dc71092143d8690b7385",
+    "triage_status": "7d25dabd5862fd4ef48e4e4d593316f7cab2224795190856cf8a7cec76da8dd4",
+    "hit_text": "757fe3aa078b0b35a69dedd0695cef93b6ebb6915343e0c03aac1226d3d314b7",
     "opportunity_score": "d65d9161fa37173d7dbc7ec448cfb6596b5354866fd1614fe8a5ea44142de658",
     "cross_property_same_machine": "853ab8e535c1d4774252fc5d8c6dd4cbb634f8a00169f75874dd04ecbb7cb656",
     "_cross_property_owner_key": "a2c7e5dbe45d65fc051ea1f1e0c202ec0f99d5462bc7daf18315bd9c40bf90ae",
-    "refresh_cv_summary": "da53059cad9974c963ecfeb30fe0331f0ba53c73e3354ca856a4cb75d87e5233",
+    "refresh_cv_summary": "6b7ba2e8b07d9c2dfb1edd72d82c5229092beb2489183300e909159d58868325",
     "reconcile_cross_property_detections": "e01db31d7047c61f72c37e48b843b714c2809c0e137bdc09f23f65384eeda73f"
   },
   "model_assets": {
-    "resnet18_embedder_state_fp16.pt": "2f849c28c03bd625303d88a61a417022c72af4b343c4cd452258b21b07e8a0a8",
+    "resnet18_embedder_state_fp16.pt": "7dbdd679df66598a8d9e63f983507eb7900af9553595a3bb250ee6e4795e6ffd",
     "pipeline_config.json": "fb11c9e25f2e52dcec34c6b74eea21d8790867da581bca24ec2be93446099925",
     "candidate.pt": "ad60ee4e6e1c158309a8f2f48a25d0fd820a3f2b322e6edfe75a57b813aef00a",
     "verifier_runtime.json": "678a67988474a9603856379b10580268ee6c5ae04d34580905b0f53f20ecbd6a"

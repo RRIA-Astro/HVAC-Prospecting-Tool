@@ -1,0 +1,20 @@
+HVAC Territory Discovery v0.11.9 — Norfolk Field-Validation Patch
+=================================================================
+Date: 2026-09-19
+
+- Preserves the v0.0.12 model weights, primary thresholds, and Virginia Beach v0.11.7 behavior.
+- Adds Norfolk-only REVIEW attribution for verified equipment located on a building footprint that
+  discovery already joined to the target, even when a split downtown tax parcel is up to 150 ft away.
+- Keeps equipment on adjoining buildings outside; 110 W Main St remains the negative control.
+- Changes Norfolk rescue-view selection to cover distinct meaningful buildings before repeating the
+  largest building. Scope Arena's 45,227-ft2 tower-bearing building now receives rescue coverage.
+- Adds a bounded Norfolk high-value public/institutional near-miss REVIEW for repeated rescue
+  candidates with very few primary proposals and limited outside-parcel spillover.
+- Encodes 600 Church St, 441 Bank St, Scope Arena, 333 Waterside Dr, and 110 W Main St as regression
+  controls with the user-reviewed outcomes REVIEW, REVIEW, REVIEW, REVIEW, and QUIET.
+- Adds rejected-rescue audit rows with predicted class, probabilities, position, attribution, and
+  rejection decision to each property's cv_result.json.
+- Restores and verifies the complete original 22,410,981-byte Stage-2 checkpoint in the source build.
+
+No model was retrained. Candidate, verifier, shifted-rescue, and zoomed-rescue thresholds remain
+0.07 / 0.35 / 0.45 / 0.015 / 0.008.

@@ -2,9 +2,26 @@ HVAC Local Detector v0.0.12 — Model Card
 =========================================
 Intended use: commercial-HVAC sales prospecting triage from high-resolution Virginia Beach aerial imagery.
 
-v0.11.8 territory note: Norfolk is added as an unvalidated expansion territory using its public 2025
-imagery and normalized city GIS/assessment inputs. The inference, rescue, and triage baseline remains
-v0.11.7. The Virginia Beach validation figures below must not be interpreted as Norfolk accuracy.
+v0.11.9 territory note: the first Norfolk blind scan exposed three adapter/decision-path failures,
+not a bad imagery download. The release adds Norfolk-only building-footprint attribution capped at
+REVIEW, distinct-building rescue coverage, and a bounded high-value public-site near-miss REVIEW.
+Virginia Beach stays on the v0.11.7 branch. The validation figures below must not be interpreted as
+Norfolk citywide accuracy.
+
+Norfolk field controls encoded in regression tests:
+  600 Church St: REVIEW via repeated high-value rescue near miss.
+  441 Bank St: REVIEW when verified equipment lies on the joined building across a split tax parcel.
+  201 E Brambleton Ave / Scope Arena: rescue must inspect the secondary tower-bearing building.
+  333 Waterside Dr: REVIEW for repeated rescue activity on a large public property.
+  110 W Main St: QUIET; towers on adjoining buildings remain rejected.
+
+Rejected rescue candidates are logged for audit. These are routing/attribution changes, not model
+retraining, and none of the model weights or confidence thresholds changed.
+
+v0.11.8 checkpoint repair: restores the complete original v0.11.7 FP16 embedder (22,410,981 bytes;
+SHA256 7dbdd679df66598a8d9e63f983507eb7900af9553595a3bb250ee6e4795e6ffd). The first Norfolk package
+used a truncated cached copy, not an intentionally changed model. No retraining or parameter
+changes were made. Archive CRC checks and GitHub model-loading smoke tests now guard packaging.
 
 Frozen thresholds: candidate 0.07; tower/chiller 0.35; large packaged 0.45.
 

@@ -4,7 +4,7 @@ HVAC Territory Discovery v0.11.8 — Validation Notes
 The build's automated test command is:
   python -m unittest -v test_detection_logic.py test_territories.py test_release_contract.py
 
-Result before packaging: 62 tests passed. Workflow YAML parsed successfully and release_identity.py
+Result after both build repairs: 69 tests passed. Workflow YAML parsed successfully and release_identity.py
 reported APP_VERSION=0.11.8, APP_TAG=v0118, APP_NAME=HVAC_Territory_Discovery_v0118.
 
 Frozen detection checks
@@ -14,6 +14,41 @@ coverage, small-priority rescue, strategic near-miss REVIEW routing, storage mor
 cross-view/property de-duplication. Tests assert DETECTOR_BASELINE_VERSION instead of a stale
 APP_VERSION literal. A separate contract checks all retained model assets and baseline inference,
 ranking, prescreen/geometry helper code and constants against the v0.11.7 source.
+
+Windows checkout repair
+-----------------------
+The original JSON asset checks hashed raw bytes. A temporary Git checkout with core.autocrlf=true
+reproduced the two screenshot failures for pipeline_config.json and verifier_runtime.json:
+  pipeline_config.json CRLF: a039db3e800f23217c1314eddd00abb687e37c5ca34e59c2b3b58ee8571d6819
+  verifier_runtime.json CRLF: a0d112f73803639b56b179984fd86f1d8c03acffb40408a8563ea20f58f121f7
+The configuration values had not changed. The repaired test normalizes CRLF to LF for .json assets
+only, without changing the frozen baseline digests. All other JSON content still changes the hash;
+.pt weights remain byte-exact. Three new tests check actual LF/CRLF/mixed JSON variants, reject
+configuration-value/non-line-ending changes, and prove binary newline changes are rejected.
+The full 65-test suite passes in both the LF source and the simulated Windows Git checkout.
+This is a build-test repair, not a detector release; APP_VERSION remains 0.11.8 and all runtime
+source, weights, configuration content, frozen baseline hashes, and workflow remained unchanged
+for that line-ending repair. The additional checkpoint repair below replaces the damaged asset.
+
+Stage-2 checkpoint recovery
+--------------------------
+Richard's HVAC_CV_ERROR.txt identifies app.py line 686, torch.load of the Stage-2 embedder.
+The damaged cached checkpoint was 22,071,296 bytes and lacked a ZIP central directory. Retrieved
+the intact original v0.11.7 source package (25,666,157 bytes) and checked the outer ZIP's CRCs,
+then the embedded checkpoint's directory and every member's CRC. The complete model is 22,410,981
+bytes and contains 126 archive members. The damaged file was its exact byte prefix, with 339,685
+trailing bytes missing. Restored the complete original; no parameters were retrained or changed.
+  Intact embedder SHA256: 7dbdd679df66598a8d9e63f983507eb7900af9553595a3bb250ee6e4795e6ffd
+Updated only the embedder digest in FROZEN_DETECTION_CONTRACT.json. All frozen function/class AST
+digests, constants, candidate model bytes, and configuration content remain unchanged.
+
+Four new offline tests verify real checkpoint archives and reject missing central directories,
+damaged tensor bytes with intact directories, and generic ZIP files without model records.
+The complete 69-test suite passes with LF and simulated Git CRLF checkouts. GitHub now runs real
+LocalCV source-model initialization before PyInstaller, verifies source/bundled SHA256 equality,
+and initializes LocalCV with the bundled assets before publishing an artifact. Those runtime
+smoke steps require the installed PyTorch/torchvision/Ultralytics dependencies and execute on the
+Windows runner; they are not a claim that the packaged GUI or a full scan was exercised locally.
 
 Norfolk adapter checks
 ----------------------

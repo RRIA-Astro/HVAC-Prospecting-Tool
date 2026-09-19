@@ -15,6 +15,12 @@ Date: 2026-09-18
 - Protects city/discovery/scan state so source selection cannot change mid-request.
 - Derives Windows executable/artifact names from APP_VERSION; uses stable regression-test filenames.
 - Updates build actions to Node 24 and preserves all required model assets.
+- Build-check repair: JSON integrity hashes tolerate LF/CRLF checkout differences only; binary
+  model hashes remain byte-exact. Adds coverage for real JSON line endings and content mutations.
+- Checkpoint repair: restores the intact original v0.11.7 Stage-2 embedder after detecting a
+  truncated cached source copy. Corrects only its frozen asset digest, not model parameters.
+- Checks checkpoint directories/tensor records/CRCs, performs real source and bundled-asset
+  model-loading smoke tests in GitHub, and verifies bundled hashes equal source hashes.
 
 FROZEN: v0.11.7 detector, verifier, prescreen rules, rescue paths, thresholds, image view scales,
 attribution, scoring, and triage. Models are byte-for-byte unchanged. Norfolk performance awaits
