@@ -32,7 +32,7 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Run frozen detector and territory regression tests
+      - name: Run detector and territory regression tests
         run: python -m unittest -v test_detection_logic.py test_territories.py test_release_contract.py
 
       - name: Verify source model assets
@@ -50,6 +50,9 @@ jobs:
             Write-Host "$p : $($item.Length) bytes"
           }
 
+      - name: Source model loading smoke test
+        run: python -c "import app; app.LocalCV(); print('Source models loaded successfully')"
+
       - name: Build portable Windows app
         shell: cmd
         run: >
@@ -65,11 +68,23 @@ jobs:
         run: |
           $root = "dist\$env:APP_NAME"
           $names = @("candidate.pt","pipeline_config.json","resnet18_embedder_state_fp16.pt","verifier_runtime.json")
+          $modelBase = $null
           foreach ($name in $names) {
-            $match = Get-ChildItem $root -Recurse -File -Filter $name | Select-Object -First 1
-            if (-not $match) { throw "PyInstaller output is missing model asset: $name" }
+            $matches = @(Get-ChildItem $root -Recurse -File -Filter $name)
+            if ($matches.Count -ne 1) { throw "Expected exactly one bundled model asset: $name; found $($matches.Count)" }
+            $match = $matches[0]
+            $sourceHash = (Get-FileHash -LiteralPath (Join-Path "models" $name) -Algorithm SHA256).Hash
+            $bundledHash = (Get-FileHash -LiteralPath $match.FullName -Algorithm SHA256).Hash
+            if ($sourceHash -ne $bundledHash) { throw "Bundled model asset differs from source: $name" }
+            $base = Split-Path (Split-Path $match.FullName)
+            if ($modelBase -and $modelBase -ne $base) { throw "Bundled model assets have inconsistent directories" }
+            $modelBase = $base
             Write-Host "$name bundled at $($match.FullName) : $($match.Length) bytes"
           }
+          "MODEL_BUNDLE_BASE=$modelBase" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Bundled model loading smoke test
+        run: python -c "import os, sys, app; sys._MEIPASS=os.environ['MODEL_BUNDLE_BASE']; app.LocalCV(); print('Bundled model assets loaded successfully')"
 
       - name: Add documentation
         shell: powershell
