@@ -234,6 +234,32 @@ def classify(land,zone,largest,avg,count,fcodes):
 def property_context(p):
     return " ".join(str(x or "") for x in (p.get("land"),p.get("zone"),p.get("facility"),p.get("facility_kind")," ".join(p.get("fcodes",[])))).upper()
 
+def norfolk_urban_hotel(p):
+    """Identify Norfolk hotels worth extra CV effort without promoting suburban low-rise hotels.
+
+    Building footprints do not carry story counts, so a substantial footprint plus dense parcel
+    coverage is used as the bounded urban/high-rise proxy. An explicit convention identity is also
+    useful when the site is substantial. Missing parcel area requires a deliberately higher floor.
+    This helper only enables better imagery/rescue coverage; it never creates prospect evidence.
+    """
+    if (p.get("territory") or "virginia_beach")!="norfolk":return False
+    ctx=property_context(p)
+    if not any(k in ctx for k in ("HOTEL","MOTEL","CONVENTION")):return False
+    largest=float(p.get("largest") or 0);psq=float(p.get("psq") or 0)
+    if largest<30000:return False
+    if "CONVENTION" in ctx:return True
+    if psq>0:return largest/psq>=.30
+    return largest>=60000
+
+def mechanical_focus_min_ft2(p):
+    """Keep the 75k-ft2 baseline, with a Norfolk-only 50k floor for high-value contexts."""
+    if (p.get("territory") or "virginia_beach")!="norfolk":return 75000
+    ctx=property_context(p)
+    priority=any(k in ctx for k in ("INDUSTR","MANUFACTUR","UTILITY","HOSP","MEDICAL","UNIVERS","COLLEGE",
+                                     "VIRGINIA TECH","MILITARY","GOVERN","SCHOOL","WAREHOUSE","DISTRIBUT",
+                                     "PUBLIC/SEMI PUBLIC"))
+    return 50000 if priority or norfolk_urban_hotel(p) else 75000
+
 def campus_buffer_ft(p):
     """Small ordinary parcel tolerance; broader only for true institutional/industrial campuses.
     Broader campus detections are surfaced as adjacent evidence, not blindly attributed as in-parcel equipment.
@@ -506,11 +532,12 @@ def campus_images(z,root):
         side=min(2400,1100.0/max(.72,math.cos(math.radians(lat))));q=root/f"P{j:02d}_PARCEL_TILE.jpg";aerial_side(lon,lat,side,q,territory=territory)
         views.append({"label":f"PARCEL TILE {j}","path":str(q),"building":None,"lon":lon,"lat":lat,"side_ft":side,"pixels":1800,"kind":"parcel_tile"})
 
-    # Large-building focus views trade some field of view for much better equipment scale. The added 70-ft
-    # perimeter specifically targets towers/fluid coolers/chillers beside warehouse/industrial walls.
+    # Large-building focus views trade some field of view for much better equipment scale. Norfolk
+    # priority sites and dense urban hotels use a 50k-ft2 floor; every Virginia Beach site retains
+    # the frozen 75k-ft2 baseline. The 70-ft perimeter targets equipment beside exterior walls.
     fj=0
     for b in bs:
-        if (b.get('sq') or 0)<75000:continue
+        if (b.get('sq') or 0)<mechanical_focus_min_ft2(z):continue
         for lon,lat in building_focus_centers(b):
             fj+=1;ground=620.0;side=min(1200,ground/max(.72,math.cos(math.radians(lat))))
             q=root/f"F{fj:02d}_{int(b.get('sq',0))}sf.jpg";aerial_side(lon,lat,side,q,territory=territory)
@@ -537,9 +564,9 @@ from datetime import datetime
 from PIL import Image,ImageTk,ImageDraw
 import numpy as np
 
-APP_VERSION='0.11.9'
+APP_VERSION='0.11.10'
 DETECTOR_BASELINE_VERSION='0.11.7'
-TERRITORY_LOGIC_VERSION='0.11.9'
+TERRITORY_LOGIC_VERSION='0.11.10'
 CANDIDATE_THRESHOLD=0.07
 TOWER_CHILLER_THRESHOLD=0.35
 LARGE_PACKAGED_THRESHOLD=0.45
@@ -577,6 +604,8 @@ DISPLAY={'COOLING_TOWER':'Tower','AIR_COOLED_CHILLER':'Chiller','LARGE_PACKAGED_
 PARCEL_BUFFER_FT=30.0
 NORFOLK_BUILDING_FOOTPRINT_TOLERANCE_FT=5.0
 NORFOLK_BUILDING_OWNED_MAX_PARCEL_DISTANCE_FT=150.0
+NORFOLK_SMALL_SITE_RESCUE_MAX_PARCEL_FT2=100000.0
+NORFOLK_SMALL_SITE_RESCUE_PARCEL_TOLERANCE_FT=10.0
 
 def safe_name(s):
     s=''.join(c if c.isalnum() or c in '-_' else '_' for c in (s or 'candidate'))
@@ -668,13 +697,30 @@ def norfolk_building_owned_review(z,parcel_distance_ft,building_distance_ft):
     return (pd>campus_buffer_ft(z) and pd<=NORFOLK_BUILDING_OWNED_MAX_PARCEL_DISTANCE_FT and
             bd<=NORFOLK_BUILDING_FOOTPRINT_TOLERANCE_FT)
 
+def rescue_attribution_allowed(z,d):
+    """Apply a tighter Norfolk-only attribution check to rescue evidence on small sites.
+
+    The ordinary 30-ft tolerance remains untouched for normal detections and every Virginia Beach
+    path. On a small, single-building Norfolk parcel, a rescue box must be nearly in the parcel or
+    on the joined building footprint. This rejects neighboring equipment such as 601 E Brambleton
+    without sacrificing split-parcel building evidence or true side-yard equipment.
+    """
+    if not d.get('parcel_ok'):return False
+    if (z.get('territory') or 'virginia_beach')!='norfolk':return True
+    psq=float(z.get('psq') or 0);count=int(z.get('count') or len(z.get('buildings') or []))
+    if not (0<psq<=NORFOLK_SMALL_SITE_RESCUE_MAX_PARCEL_FT2 and count<=1):return True
+    pd=d.get('parcel_distance_ft');bd=d.get('building_distance_ft')
+    near_parcel=pd is not None and float(pd)<=NORFOLK_SMALL_SITE_RESCUE_PARCEL_TOLERANCE_FT
+    on_building=bd is not None and float(bd)<=NORFOLK_BUILDING_FOOTPRINT_TOLERANCE_FT
+    return near_parcel or on_building
+
 def thermal_rescue_eligible(z):
     ctx=property_context(z);largest=z.get('largest') or 0
     poor=any(k in ctx for k in ('SINGLE FAMILY','DUPLEX','MULTI FAMILY','MULTIFAMILY','APART','CONDO','TOWN HOUSE','TOWNHOUSE',
                                  'TOWNHOME','RESTAUR','RETAIL','SHOPPING','STORE','PUBLIC STORAGE','SELF STORAGE','MINI STORAGE'))
     priority=any(k in ctx for k in ('INDUSTR','MANUFACTUR','UTILITY','HOSP','MEDICAL','UNIVERS','COLLEGE','VIRGINIA TECH',
                                      'MILITARY','GOVERN','SCHOOL','WAREHOUSE','DISTRIBUT','PUBLIC/SEMI PUBLIC'))
-    return priority and not poor and largest>=2500 and not repetitive_storage_like(z)
+    return (priority or norfolk_urban_hotel(z)) and not poor and largest>=2500 and not repetitive_storage_like(z)
 
 def thermal_rescue_views(views,z):
     """Choose focus views by value without excluding smaller priority properties."""
@@ -757,11 +803,14 @@ class LocalCV:
             if q not in normal and q not in out:out.append(q)
         return out or [(mx,my)]
 
-    def perimeter_rescue_tile_origins(self,w,h):
-        """Overlapping zoom crops; 1800px imagery becomes a 3x3 grid at 0/644/1288."""
+    def perimeter_rescue_tile_origins(self,w,h,z=None):
+        """Return zoom crops, closing Norfolk blind bands while freezing Virginia Beach's grid."""
         t=PERIMETER_RESCUE_TILE_PX
         def axes(n):
             if n<=t:return [0]
+            if (z or {}).get('territory')=='norfolk':
+                end=n-t
+                return list(dict.fromkeys(round(i*end/3) for i in range(4)))
             return list(dict.fromkeys((0,(n-t)//2,n-t)))
         return [(x,y) for x in axes(w) for y in axes(h)]
 
@@ -890,7 +939,7 @@ class LocalCV:
                     self._record_rescue_audit(d,view,'SHIFTED','THERMAL_SCORE_BELOW_REVIEW');continue
                 if internal_edge:
                     self._record_rescue_audit(d,view,'SHIFTED','INTERNAL_TILE_EDGE');continue
-                if not d['parcel_ok']:
+                if not rescue_attribution_allowed(z,d):
                     self._record_rescue_audit(d,view,'SHIFTED','OUTSIDE_PROPERTY');continue
                 if not 7.0<=d.get('long_ft',0)<=130.0:
                     self._record_rescue_audit(d,view,'SHIFTED','PHYSICAL_SIZE');continue
@@ -911,7 +960,7 @@ class LocalCV:
         path=view['path'];im=Image.open(path).convert('RGB');w,h=im.size;out=[];props=0;tiles_run=0;verified=0
         ground_side=float(view.get('side_ft') or 700)*math.cos(math.radians(float(view['lat'])))
         ft_per_px=ground_side/max(w,1)
-        for x0,y0 in self.perimeter_rescue_tile_origins(w,h):
+        for x0,y0 in self.perimeter_rescue_tile_origins(w,h,z):
             tw=min(PERIMETER_RESCUE_TILE_PX,w-x0);th=min(PERIMETER_RESCUE_TILE_PX,h-y0)
             if tw<256 or th<256:continue
             crop=im.crop((x0,y0,x0+tw,y0+th)).convert('RGB')
@@ -942,7 +991,7 @@ class LocalCV:
                     self._record_rescue_audit(d,view,'ZOOMED','NON_THERMAL_CLASS');continue
                 if p<PERIMETER_RESCUE_MIN_P or best<PERIMETER_RESCUE_MIN_BEST:
                     self._record_rescue_audit(d,view,'ZOOMED','THERMAL_SCORE_BELOW_REVIEW');continue
-                if not d['parcel_ok']:
+                if not rescue_attribution_allowed(z,d):
                     self._record_rescue_audit(d,view,'ZOOMED','OUTSIDE_PROPERTY');continue
                 if not 7.0<=d.get('long_ft',0)<=130.0:
                     self._record_rescue_audit(d,view,'ZOOMED','PHYSICAL_SIZE');continue
@@ -1385,7 +1434,7 @@ class App:
         self.discb=ttk.Button(t,text='1. Discover + Prescreen',command=self.start);self.discb.grid(row=0,column=8,padx=8)
         self.scanb=ttk.Button(t,text='2. Analyze Prescreened',command=self.analyze_prescreened);self.scanb.grid(row=0,column=9,padx=5)
         self.openb=ttk.Button(t,text='Open Existing Scan',command=self.load_existing_scan);self.openb.grid(row=0,column=10,padx=8)
-        self.st=tk.StringVar(value=f'v{APP_VERSION} Norfolk field-validation patch — frozen v0.0.12 models; Virginia Beach behavior preserved.');ttk.Label(r,textvariable=self.st).pack(fill='x',padx=10)
+        self.st=tk.StringVar(value=f'v{APP_VERSION} Norfolk urban-hotel and rescue-coverage patch — frozen v0.0.12 models; Virginia Beach preserved.');ttk.Label(r,textvariable=self.st).pack(fill='x',padx=10)
         cols=('rank','facility','address','cv','opp','evidence','maxp','review','note','largest','bldgs','mi','land','tier','pre','prewhy','gis','source')
         heads={'rank':'#','facility':'FACILITY','address':'ADDRESS','cv':'TRIAGE','opp':'OPP','evidence':'MECHANICAL EVIDENCE','maxp':'MAX P','review':'USER','note':'NOTE','largest':'LARGEST','bldgs':'BLDGS','mi':'MI','land':'LAND USE','tier':'GIS TIER','pre':'PRE','prewhy':'PRESCREEN REASON','gis':'GIS','source':'FOOTPRINT'}
         widths=(42,205,170,72,52,245,55,72,150,82,48,48,145,65,42,170,48,85)
@@ -1506,7 +1555,7 @@ class App:
                 f'HVAC Territory Discovery v{APP_VERSION}\nCities: {city_names}\nCore detector baseline: v{DETECTOR_BASELINE_VERSION}\nTerritory logic: v{TERRITORY_LOGIC_VERSION}\n'
                 f'Frozen detector pipeline v0.0.12\nPrimary thresholds 0.07 / 0.35 / 0.45\nParcel buffer: {PARCEL_BUFFER_FT:.0f} ft\n\n'
                 f'Properties analyzed: {len(rows)}\nSTRONG: {strong}\nREVIEW: {review}\nSurfaced total: {surf}\nQUIET: {quiet}\nNeighbor-assigned duplicate evidence: {reassigned}\n\n'
-                'v0.11.9 retains the model weights and thresholds, preserves Virginia Beach behavior, and adds bounded Norfolk-only attribution, rescue-view, and high-value REVIEW safeguards.\n'
+                'v0.11.10 retains the model weights and thresholds, preserves Virginia Beach behavior, and adds bounded Norfolk-only full-coverage rescue, urban-hotel focus, and small-site attribution safeguards.\n'
                 'See SCAN_METADATA.json for discovery coverage/candidate limits and data sources, and DISCOVERY_AUDIT.json for prescreened and filtered displayed candidates.\n'
                 'Mechanical evidence is geographically de-duplicated across views and properties. Ordinary outside-parcel and context-rejected detections do not rank; Norfolk equipment on an already-joined building footprint is REVIEW-only.\n'
                 'QUIET does not prove that valuable equipment is absent. Imagery age, shadows, roof displacement, GIS completeness, and hidden equipment can affect detection.\n',encoding='utf-8')

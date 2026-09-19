@@ -1,0 +1,21 @@
+HVAC Territory Discovery v0.11.10 — Norfolk Rescue-Coverage Patch
+=================================================================
+Date: 2026-09-19
+
+- Preserves the v0.0.12 model weights, every detector threshold, and Virginia Beach v0.11.7 behavior.
+- Replaces Norfolk's gapped 3 x 3 perimeter-rescue grid with a fully overlapping 4 x 4 grid. On an
+  1800-pixel image the axes are 0 / 429 / 859 / 1288 instead of 0 / 644 / 1288.
+- Adds 50,000-ft2 mechanical-focus imagery for Norfolk priority properties. The general and all
+  Virginia Beach focus floors remain 75,000 ft2.
+- Makes substantial urban/dense Norfolk hotels rescue-eligible. A hotel needs a >=30,000-ft2
+  building and >=30% parcel coverage; missing parcel area requires >=60,000 ft2. Explicit
+  convention identity also qualifies at >=30,000 ft2. Low-rise suburban hotels are not promoted.
+- Adds a Norfolk-only rescue-attribution guard on parcels <=100,000 ft2 with one building. Rescue
+  evidence must be within 10 ft of the parcel or within 5 ft of the joined building footprint.
+- Encodes 201 E Brambleton (Scope Arena), 610 May, 777 Waterside, 601 E Brambleton, and
+  124 W Freemason as the new field controls while retaining the v0.11.9 controls.
+- Intentionally keeps 124 W Freemason at REVIEW; its false positive is preferable to a global
+  restriction that could hide real tower/chiller evidence.
+
+No model was retrained. Candidate, verifier, shifted-rescue, and zoomed-rescue thresholds remain
+0.07 / 0.35 / 0.45 / 0.015 / 0.008.

@@ -1,0 +1,55 @@
+HVAC Territory Discovery v0.11.10 — Validation Notes
+====================================================
+
+Field evidence
+--------------
+The latest Norfolk blind scan performed well overall but exposed two definite QUIET misses and one
+ambiguous control:
+
+1. 610 May Ave has a clear side/recessed fan-top tower. Normal Stage 1 produced no proposal. Shifted
+   rescue verified no candidates and the old 3 x 3 zoom grid left blind bands in the source image.
+   Its 72,444-ft2 school building also narrowly missed the old 75,000-ft2 mechanical-focus floor.
+2. 777 Waterside Dr has two side towers. It received no rescue because hotels were not priority
+   context. Its 72,554-ft2 building likewise narrowly missed the focus floor. The assessed HOTEL
+   occupies about 46.7% of its 155,494-ft2 parcel, a useful urban/dense signal.
+3. Scope Arena's multi-cell tower bank is visible beside the joined 45,227-ft2 secondary building.
+   v0.11.9 selected that building for rescue, but the old zoom grid could still place the bank in a
+   132-pixel blind band or near a crop edge.
+
+Two false positives bounded the correction. At 601 E Brambleton, the retained rescue chiller was
+20.64 ft beyond the target parcel and 20.68 ft from its joined building, on a neighboring property.
+At 124 W Freemason, grouped rooftop equipment remains a plausible REVIEW from the detector's view;
+the user prefers that false positive to a more restrictive global rule.
+
+Release logic
+-------------
+- Norfolk 1800-pixel rescue views now use sixteen overlapping 512-pixel crops with no uncovered
+  source-image bands. Virginia Beach and unscoped tests retain the exact nine-crop baseline.
+- Norfolk school/government/industrial/institutional priority sites and qualifying urban hotels use
+  a 50,000-ft2 focus floor. Other Norfolk sites and all Virginia Beach sites stay at 75,000 ft2.
+- HOTEL/MOTEL wording alone is insufficient. The urban-hotel path requires size plus density (or
+  explicit convention identity), and only enables imagery/rescue; it cannot manufacture evidence.
+- On a <=100,000-ft2, single-building Norfolk site, retained rescue evidence must be within 10 ft
+  of the parcel or within 5 ft of the joined target footprint. Normal detections are unchanged.
+- Model files, normal inference, all verifier thresholds, and triage thresholds are unchanged.
+
+Expected control outcomes
+-------------------------
+- 201 E Brambleton / Scope Arena: should surface at least REVIEW if the added crops propose its bank.
+- 610 May Ave: should surface at least REVIEW if focus/overlap rescue proposes its tower.
+- 777 Waterside Dr: should surface at least REVIEW if hotel focus/rescue proposes its two towers.
+- 601 E Brambleton Ave: should become QUIET; the neighboring rescue box fails attribution.
+- 124 W Freemason St: may remain REVIEW by design.
+- v0.11.9 controls remain: 600 Church, 441 Bank, Scope Arena, and 333 Waterside surface; 110 W Main
+  remains QUIET. Virginia Beach retains its v0.11.7 branch.
+
+Regression coverage
+-------------------
+The 78-test offline suite covers grid geometry, hotel qualification, focus-floor routing, small-site
+attribution, the acceptable Freemason REVIEW, prior field controls, Virginia Beach preservation,
+source routing, imagery validation, build naming, checkpoint integrity, and bundle checks.
+
+The local scratch runtime does not include torch/torchvision/ultralytics, so full model loading and
+PyInstaller assembly remain GitHub Actions checks. The workflow validates checkpoint archives, loads
+the actual source models, verifies bundled SHA256 equality, and loads the bundled models before it
+publishes the Windows artifact.

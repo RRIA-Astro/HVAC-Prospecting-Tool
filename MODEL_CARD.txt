@@ -2,21 +2,23 @@ HVAC Local Detector v0.0.12 — Model Card
 =========================================
 Intended use: commercial-HVAC sales prospecting triage from high-resolution Virginia Beach aerial imagery.
 
-v0.11.9 territory note: the first Norfolk blind scan exposed three adapter/decision-path failures,
-not a bad imagery download. The release adds Norfolk-only building-footprint attribution capped at
-REVIEW, distinct-building rescue coverage, and a bounded high-value public-site near-miss REVIEW.
-Virginia Beach stays on the v0.11.7 branch. The validation figures below must not be interpreted as
-Norfolk citywide accuracy.
+v0.11.10 territory note: the latest Norfolk blind scan exposed rescue-coverage and context failures,
+not a bad imagery download. Norfolk now uses a fully overlapping 4 x 4 zoom grid, a lower focus-view
+floor for priority sites, contextual rescue for substantial urban/dense hotels, and tighter rescue
+attribution on small single-building sites. Virginia Beach stays on the v0.11.7 branch. The validation
+figures below must not be interpreted as Norfolk citywide accuracy.
 
-Norfolk field controls encoded in regression tests:
-  600 Church St: REVIEW via repeated high-value rescue near miss.
-  441 Bank St: REVIEW when verified equipment lies on the joined building across a split tax parcel.
-  201 E Brambleton Ave / Scope Arena: rescue must inspect the secondary tower-bearing building.
-  333 Waterside Dr: REVIEW for repeated rescue activity on a large public property.
-  110 W Main St: QUIET; towers on adjoining buildings remain rejected.
+New Norfolk field controls encoded in regression tests:
+  201 E Brambleton Ave / Scope Arena: the secondary tower-bearing building gets gap-free rescue.
+  610 May Ave: its 72,444-ft2 school building gets a focus view and gap-free rescue.
+  777 Waterside Dr: its dense urban HOTEL context gets focus and rescue; suburban hotels do not.
+  601 E Brambleton Ave: neighboring rescue evidence 20+ ft from parcel/building is rejected.
+  124 W Freemason St: REVIEW may remain; this accepted false positive prevents global overfitting.
 
-Rejected rescue candidates are logged for audit. These are routing/attribution changes, not model
-retraining, and none of the model weights or confidence thresholds changed.
+The v0.11.9 controls and safeguards remain: 600 Church and 333 Waterside high-value near misses,
+441 Bank split-parcel building ownership, distinct-building Scope rescue, and the negative 110 W Main
+adjoining-building control. Rejected rescue candidates remain logged for audit. These are routing,
+coverage, and attribution changes—not model retraining—and no confidence threshold changed.
 
 v0.11.8 checkpoint repair: restores the complete original v0.11.7 FP16 embedder (22,410,981 bytes;
 SHA256 7dbdd679df66598a8d9e63f983507eb7900af9553595a3bb250ee6e4795e6ffd). The first Norfolk package

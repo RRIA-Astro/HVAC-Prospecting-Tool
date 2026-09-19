@@ -39,7 +39,7 @@ def validate_checkpoint_archive(path):
 
 
 class ReleaseContractTests(unittest.TestCase):
-    def test_frozen_core_models_and_v0119_logic_match_the_release_contract(self):
+    def test_frozen_core_models_and_v01110_logic_match_the_release_contract(self):
         contract=json.loads((ROOT/'FROZEN_DETECTION_CONTRACT.json').read_text(encoding='utf-8'))
         self.assertEqual(app.DETECTOR_BASELINE_VERSION,contract['detector_baseline_version'])
         self.assertEqual(app.TERRITORY_LOGIC_VERSION,contract['territory_logic_version'])

@@ -238,7 +238,7 @@ class ImageryAndAuditTests(unittest.TestCase):
     def test_scan_metadata_identifies_frozen_baseline_and_sources(self):
         d=app.make_scan_metadata([{'territory':'norfolk'}],{'truncated':True})
         self.assertEqual(d['detector_baseline_version'],'0.11.7');self.assertEqual(d['model_pipeline_version'],'0.0.12')
-        self.assertEqual(d['territory_logic_version'],'0.11.9')
+        self.assertEqual(d['territory_logic_version'],'0.11.10')
         self.assertEqual(d['data_sources'][0]['city'],'Norfolk');self.assertTrue(d['discovery']['truncated'])
 
     def test_all_campus_views_use_the_row_territory_and_manifest(self):
@@ -252,6 +252,17 @@ class ImageryAndAuditTests(unittest.TestCase):
         self.assertTrue(all(c.kwargs['territory']=='norfolk' for c in download.call_args_list))
         self.assertEqual(manifest['data_sources']['city'],'Norfolk')
         self.assertEqual(views[1]['pixels'],1800);self.assertEqual(views[1]['side_ft'],420)
+
+    def test_dense_norfolk_hotel_gets_focus_view_but_vb_baseline_does_not_change(self):
+        building={'lon':-76.28,'lat':36.85,'sq':72554,'rings':[square(side=250)]}
+        base={'address':'777 Waterside DR','lon':-76.28,'lat':36.85,'rings':[square(side=400)],
+              'psq':155494,'count':1,'largest':72554,'land':'HOTEL','zone':'','facility':'',
+              'facility_kind':'','fcodes':[],'buildings':[building]}
+        with tempfile.TemporaryDirectory() as td,patch.object(app,'aerial_side'):
+            nf=app.campus_images(dict(base,territory='norfolk'),Path(td)/'nf')
+            vb=app.campus_images(dict(base,territory='virginia_beach'),Path(td)/'vb')
+        self.assertIn('building_focus',[v['kind'] for v in nf])
+        self.assertNotIn('building_focus',[v['kind'] for v in vb])
 
     def test_arcgis_json_errors_are_not_saved_as_jpegs(self):
         response=io.BytesIO(b'{"error":{"message":"No coverage"}}')

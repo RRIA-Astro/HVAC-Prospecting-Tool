@@ -1,6 +1,6 @@
 {
   "detector_baseline_version": "0.11.7",
-  "territory_logic_version": "0.11.9",
+  "territory_logic_version": "0.11.10",
   "constants": {
     "CANDIDATE_THRESHOLD": 0.07,
     "TOWER_CHILLER_THRESHOLD": 0.35,
@@ -32,7 +32,9 @@
     },
     "PARCEL_BUFFER_FT": 30.0,
     "NORFOLK_BUILDING_FOOTPRINT_TOLERANCE_FT": 5.0,
-    "NORFOLK_BUILDING_OWNED_MAX_PARCEL_DISTANCE_FT": 150.0
+    "NORFOLK_BUILDING_OWNED_MAX_PARCEL_DISTANCE_FT": 150.0,
+    "NORFOLK_SMALL_SITE_RESCUE_MAX_PARCEL_FT2": 100000.0,
+    "NORFOLK_SMALL_SITE_RESCUE_PARCEL_TOLERANCE_FT": 10.0
   },
   "frozen_nodes": {
     "bbox": "80d612b010b78a757f09fe9f4220a97f3b32de88c2f17926b6aaa1469c6827f5",
@@ -44,6 +46,8 @@
     "pinpoly": "1858dbb085a3c06146146b224703e0875e0f46d271964de1b31d90cba356189c",
     "classify": "d565cb1c0e785723e20593afc799776e2809dca09d85cd21712a537910e3913e",
     "property_context": "7c5c7167cacbd6c34dd5f794982f33a6243c7ab1c36fcd9763d81d1dcbd67082",
+    "norfolk_urban_hotel": "2d601cb69d427666c76b9e5da153bf176baa8a1ea9922cf874ae1e20f8e6f297",
+    "mechanical_focus_min_ft2": "6c57488ef2f52a6fca9332e82d910a0ee2c162143609b727cdeac50c7b780221",
     "campus_buffer_ft": "7d542e7ee330a2add34f9345945a2ad3754a5f67ae07ce5eb0b1d36a9acdd4bb",
     "building_elongation": "ac1a93e1bba76f69b933982fec0577e2a2ab31176889c48631df6882bd6540b1",
     "repetitive_storage_like": "05b2a9458f5da0d92a5d7018ea1910e7ebd995864354d2e2abba88589f97e3e1",
@@ -57,6 +61,7 @@
     "meaningful_buildings": "ece99a3c9bdf4ea24a40bd2a4abc5a1a0b85e2fa38cab5478473f8271d797773",
     "building_focus_centers": "f24e68083fb4d6edf13477d77a08ea0e76fc3357216005dccff11d950d2519e9",
     "_coverage_centers": "11814b80d2afec800ed1b735e4bdcc4183b035a487eecd948d189f2ce1fc18e6",
+    "campus_images": "354a92d87b914a059c593526e8b200d39e39fd00c9e0e4b98e2fa37497004b4d",
     "safe_name": "4f5cdbc458084fc97e5cabb42589eaf9329b8100ea847405510723ca6929aec8",
     "resource_path": "95aa5df9301b1b2ebb7cf333d32feefa1dd5b5e59eb3545f502d1836ff373694",
     "required_asset": "9197897a13c680449a874c501965b9dff068854b57dfd8e72f60502563b7f97a",
@@ -65,9 +70,10 @@
     "square_crop": "2bac2e9b6d9fc2e618c44136c7fdadb2c2c8ec2f22c65068586d55be87f820e0",
     "softmax": "629013912c9007b259ffc726fb9ffe0cdc70e44e79fe0c05df3170c48c42bb1c",
     "nearest_building_distance_ft": "5b09f6256282c494b13827ea007a9a00b867ac32fd1f604dd2ef80ee081b8aa0",
-    "thermal_rescue_eligible": "3b046d888e5c78ebf50c77057f8b124f0fffbe7f54a23af987a6de82968464c3",
+    "rescue_attribution_allowed": "dd9ec712d0ed1afe1f24c461a560c0a1e1280fe53cb9cd347ae5e4878c61e972",
+    "thermal_rescue_eligible": "910c4378035a896ef05668ba293de61d2af387fa494b30df8c6b06645792732b",
     "thermal_rescue_views": "d7e183bc760321ff7206c23be6d24a297838651103ee438718d16e6229288178",
-    "LocalCV": "d5c5c43955921c6279127b7602e610bd069f9c4fe0cf7bed164a368e5fc58b30",
+    "LocalCV": "0441506b319ff73f65da785feeb0ee2d20a0fdbbda275ed5aa88a3b4caec6b12",
     "norfolk_building_owned_review": "136c6a96d4e642f66c9babc8ab3ffb82ce9e8b72675837bfd588546267312b17",
     "norfolk_high_value_rescue_review": "bf5919b1e3ec9dda4e8459e77e222f2e5c07b16035aacc88ec9bface93519e6d",
     "package_same_machine": "c3546a257b5b6dbccbcb08cfcda966b102031fb24e3c4980e8eaa1eae63a38dd",

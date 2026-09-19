@@ -1,5 +1,5 @@
-HVAC Territory Discovery v0.11.9 — Norfolk Field-Validation Patch
-=================================================================
+HVAC Territory Discovery v0.11.10 — Norfolk Rescue-Coverage Patch
+==================================================================
 
 Purpose
 -------
@@ -10,21 +10,28 @@ proof that valuable equipment is absent. Ambiguous evidence still requires sales
 
 What changed
 ------------
-v0.11.9 applies the first Norfolk blind-scan findings without globally lowering a model threshold.
-It preserves the established Virginia Beach branch and adds three bounded Norfolk-only safeguards:
+v0.11.10 applies the latest Norfolk blind-scan findings without globally lowering a model threshold.
+It preserves the established Virginia Beach branch and adds four bounded Norfolk-only safeguards:
 
-  * Equipment physically on a building footprint already joined to the target can survive a split
-    downtown tax parcel, but only as REVIEW and only within 150 ft of the parcel. Equipment on an
-    adjoining building remains outside. This separates 441 Bank St from the 110 W Main St control.
-  * Rescue covers distinct meaningful buildings before repeating the largest structure. This sends
-    a rescue view to the 45,227-ft2 Scope Arena building carrying the six-cell tower bank.
-  * A large public/institutional Norfolk property with very few primary proposals, repeated rescue
-    candidates, and little outside-parcel spillover receives an honest unverified REVIEW. This
-    surfaces 600 Church St and 333 Waterside Dr without claiming a tower/chiller class.
+  * Zoomed perimeter rescue now uses a fully overlapping 4 x 4 grid instead of a gapped 3 x 3 grid.
+    On an 1800-pixel source image this removes two 132-pixel blind bands on each axis.
+  * Norfolk priority sites use a 50,000-ft2 mechanical-focus floor. This gives 610 May Ave's
+    72,444-ft2 school building a higher-resolution view; the general 75,000-ft2 floor is unchanged.
+  * Hotels qualify for added focus/rescue only when they look substantial and urban/dense in GIS:
+    >=30,000-ft2 building footprint and >=30% parcel coverage. With missing parcel area, the floor
+    is >=60,000 ft2. Explicit convention identity qualifies at >=30,000 ft2. Low-rise suburban
+    hotels are deliberately not promoted. This targets 777 Waterside without making HOTEL a blanket
+    priority class.
+  * Rescue evidence on a <=100,000-ft2 single-building Norfolk site must be within 10 ft of the
+    parcel or within 5 ft of its joined building. This rejects the neighboring equipment at
+    601 E Brambleton while retaining genuine in-parcel and split-building evidence.
 
-Rejected rescue candidates now remain auditable in cv_result.json with their predicted class,
-probabilities, mapped position, and rejection decision. This closes the diagnostic gap exposed by
-600 Church St. The model weights and primary/rescue thresholds are unchanged.
+The 124 W Freemason grouped-equipment false positive may remain REVIEW by design. That ambiguity is
+preferable to a global restriction that could hide real prospects. Model weights and every primary,
+shifted-rescue, zoomed-rescue, ranking, and triage threshold are unchanged.
+
+All v0.11.9 safeguards remain: split-parcel joined-building REVIEW attribution, distinct-building
+rescue selection, bounded public/institutional near-miss REVIEW, and rejected-rescue audit records.
 
 Norfolk remains selectable alongside Virginia Beach. The app starts with Norfolk selected,
 centered at 800 E City Hall Ave with a 0.5-mile radius. Select Virginia Beach to use its existing
@@ -54,7 +61,7 @@ Core detector and territory contract
 ------------------------------------
 The v0.0.12 model files and primary operating points remain byte-for-byte unchanged from the
 v0.11.7 detector baseline. Virginia Beach rescue selection, attribution, and triage remain on that
-branch. v0.11.9 adds only the bounded Norfolk territory logic described above. Operating points stay:
+branch. v0.11.10 adds only the bounded Norfolk territory logic described above. Operating points stay:
 
   Stage 1 candidate: 0.07
   Tower/chiller verifier: 0.35
@@ -73,8 +80,10 @@ Norfolk validation rerun
 2. Leave Norfolk selected. Start with the 0.5-mile radius and 10,000 ft2 size setting.
 3. Click Discover + Prescreen. Inspect the city, addresses, footprint source, and warnings.
 4. Aim for about 75-100 passing properties. Shrink/expand the radius if needed, then Analyze.
-5. Re-run the same 0.5-mile control area first. Confirm that 600 Church, 441 Bank, Scope Arena,
-   and 333 Waterside surface while 110 W Main stays quiet. Then move to a fresh Norfolk area.
+5. Re-run the same 0.5-mile control area first. Confirm that Scope Arena, 610 May, and 777 Waterside
+   surface at least REVIEW; 601 E Brambleton becomes QUIET; and 124 W Freemason may remain REVIEW.
+6. Reconfirm the prior controls: 600 Church, 441 Bank, Scope Arena, and 333 Waterside surface while
+   110 W Main stays QUIET. Then move to a fresh Norfolk area.
 
 Discovery still displays at most 250 candidates, with prescreen-passing sites sorted first.
 The status line and metadata disclose when this cap is reached. Compare displayed passing sites
@@ -83,7 +92,7 @@ overlapping searches. The cap warning can also mean only filtered/nonpassing row
 The scan covers the selected city's parcel inventory only, even when a radius crosses city limits.
 
 Shadows, tall-building roof displacement relative to footprints, imagery age, GIS completeness,
-and equipment concealed by screens/penthouses can affect results. The five named controls validate
+and equipment concealed by screens/penthouses can affect results. The named controls validate
 the repair targets, not citywide accuracy; the next fresh-area run remains a blind generalization test.
 
 Output
@@ -134,14 +143,14 @@ Commit the replacements and use the new build run. Uploading the model alone lea
 check; re-running an old commit still uses its old files. The binary is below GitHub's 25 MiB web
 upload limit. Updated README, changelog, regression notes, and model card are optional documentation.
 
-The 73-test suite opens each checkpoint and verifies all archive CRCs, with regressions for
+The 78-test suite opens each checkpoint and verifies all archive CRCs, with regressions for
 missing central directories, corrupted tensor bytes, and generic ZIPs that are not checkpoints.
 The workflow additionally loads the actual source models before PyInstaller, compares every
 bundled asset byte-for-byte with its source, and loads the bundled assets using the same LocalCV
 initializer. These checks do not run a full detector scan or launch the packaged Windows GUI.
 
-For this release the artifact is HVAC_Territory_Discovery_v0119_Windows.zip.
-Extract it and run HVAC_Territory_Discovery_v0119.exe. Keep its other bundled files intact.
+For this release the artifact is HVAC_Territory_Discovery_v01110_Windows.zip.
+Extract it and run HVAC_Territory_Discovery_v01110.exe. Keep its other bundled files intact.
 
 Source run / offline validation (Python 3.12)
 --------------------------------------------
@@ -151,7 +160,7 @@ Source run / offline validation (Python 3.12)
   python app.py
 
 The automated suite does not require live GIS requests or load the ML runtime. It covers preserved
-Virginia Beach behavior, model/code hashes, the five Norfolk field controls, classifications/joins,
+Virginia Beach behavior, model/code hashes, the Norfolk field controls, classifications/joins,
 acquisition scale, error handling, auditing, and release packaging. Windows EXE assembly runs in GitHub Actions.
 Keep v0.10.1 as the separate training-safe labeling app.
 

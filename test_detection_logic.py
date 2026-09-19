@@ -52,7 +52,7 @@ class _Candidate:
 class FrozenDetectionLogicTests(unittest.TestCase):
     def test_frozen_primary_operating_points(self):
         self.assertEqual(app.DETECTOR_BASELINE_VERSION,"0.11.7")
-        self.assertEqual(app.TERRITORY_LOGIC_VERSION,"0.11.9")
+        self.assertEqual(app.TERRITORY_LOGIC_VERSION,"0.11.10")
         self.assertEqual((app.CANDIDATE_THRESHOLD,app.TOWER_CHILLER_THRESHOLD,app.LARGE_PACKAGED_THRESHOLD),(.07,.35,.45))
 
     def test_5925_target_is_well_inside_a_zoom_crop(self):
@@ -61,6 +61,47 @@ class FrozenDetectionLogicTests(unittest.TestCase):
         x,y=1535,935;t=app.PERIMETER_RESCUE_TILE_PX
         margins=[min(x-x0,y-y0,x0+t-x,y0+t-y) for x0,y0 in origins if x0<=x<=x0+t and y0<=y<=y0+t]
         self.assertGreaterEqual(max(margins),200)
+
+    def test_norfolk_zoom_grid_closes_blind_bands_without_changing_vb(self):
+        eng=app.LocalCV.__new__(app.LocalCV)
+        vb=eng.perimeter_rescue_tile_origins(1800,1800,{"territory":"virginia_beach"})
+        nf=eng.perimeter_rescue_tile_origins(1800,1800,{"territory":"norfolk"})
+        self.assertEqual(len(vb),9);self.assertEqual(sorted({x for x,_ in vb}),[0,644,1288])
+        self.assertEqual(len(nf),16);self.assertEqual(sorted({x for x,_ in nf}),[0,429,859,1288])
+        axes=sorted({x for x,_ in nf})
+        self.assertTrue(all(b-a<app.PERIMETER_RESCUE_TILE_PX for a,b in zip(axes,axes[1:])))
+        self.assertEqual(axes[-1]+app.PERIMETER_RESCUE_TILE_PX,1800)
+
+    def test_norfolk_hotel_rescue_is_urban_contextual_not_blanket(self):
+        urban={"territory":"norfolk","land":"HOTEL","facility":"Sheraton Norfolk Waterside Hotel",
+               "zone":"","facility_kind":"","fcodes":[],"largest":72554,"psq":155494,
+               "count":1,"buildings":[]}
+        suburban=dict(urban,facility="Suburban low-rise hotel",largest=45000,psq=250000)
+        convention=dict(suburban,facility="Downtown Hotel and Convention Center")
+        self.assertTrue(app.norfolk_urban_hotel(urban));self.assertTrue(app.thermal_rescue_eligible(urban))
+        self.assertFalse(app.norfolk_urban_hotel(suburban));self.assertFalse(app.thermal_rescue_eligible(suburban))
+        self.assertTrue(app.norfolk_urban_hotel(convention))
+        self.assertFalse(app.norfolk_urban_hotel(dict(urban,territory="virginia_beach")))
+        self.assertFalse(app.thermal_rescue_eligible(dict(urban,territory="virginia_beach")))
+        self.assertEqual(app.mechanical_focus_min_ft2(urban),50000)
+        self.assertEqual(app.mechanical_focus_min_ft2(suburban),75000)
+        self.assertEqual(app.mechanical_focus_min_ft2(dict(urban,territory="virginia_beach")),75000)
+
+    def test_norfolk_priority_focus_floor_covers_610_may_without_changing_vb(self):
+        school={"territory":"norfolk","land":"SCHOOL","facility":"Ruffner Academy","zone":"",
+                "facility_kind":"","fcodes":[],"largest":72444,"psq":427820}
+        self.assertEqual(app.mechanical_focus_min_ft2(school),50000)
+        self.assertEqual(app.mechanical_focus_min_ft2(dict(school,territory="virginia_beach")),75000)
+
+    def test_norfolk_small_site_rescue_attribution_rejects_neighbor_only(self):
+        site={"territory":"norfolk","land":"INDUSTRIAL","psq":46168,"count":1,"buildings":[{}]}
+        neighbor={"parcel_ok":True,"parcel_distance_ft":20.637,"building_distance_ft":20.682}
+        self.assertFalse(app.rescue_attribution_allowed(site,neighbor))
+        self.assertTrue(app.rescue_attribution_allowed(site,dict(neighbor,parcel_distance_ft=0)))
+        self.assertTrue(app.rescue_attribution_allowed(site,dict(neighbor,building_distance_ft=0)))
+        self.assertTrue(app.rescue_attribution_allowed(dict(site,territory="virginia_beach"),neighbor))
+        self.assertTrue(app.rescue_attribution_allowed(dict(site,psq=155494),neighbor))
+        self.assertFalse(app.rescue_attribution_allowed(site,dict(neighbor,parcel_ok=False)))
 
     def test_zoom_detection_maps_back_to_source_coordinates(self):
         eng=app.LocalCV.__new__(app.LocalCV);eng.candidate=_Candidate()
@@ -146,6 +187,14 @@ class FrozenDetectionLogicTests(unittest.TestCase):
         self.assertEqual(app.triage_status(adjoining,cv(17,7,1,13)),"QUIET")
         self.assertEqual(app.triage_status(dict(post,territory="virginia_beach"),cv(0,6,2)),"QUIET")
         self.assertIn("High-value rescue near miss 17",app.hit_text(cv(0,15,2),waterside))
+
+    def test_124_freemason_acceptable_review_is_not_overfit_away(self):
+        z={"territory":"norfolk","land":"COMMERCIAL","largest":45090,"psq":30516,
+           "count":1,"buildings":[]}
+        package=detection("LARGE_PACKAGED_HVAC",.8121,.5605,43.75,34.06,bd=0,pd=3.99,kind="overview")
+        chiller=detection("AIR_COOLED_CHILLER",.5499,.2007,30.39,30.03,bd=0,pd=0,kind="overview")
+        cv={"detections":[package,chiller],"raw_detections":[package,chiller]}
+        self.assertEqual(app.triage_status(z,cv),"REVIEW")
 
     def test_known_package_context_cases(self):
         z={"land":"INDUSTRIAL","buildings":[]}
