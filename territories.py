@@ -1,7 +1,7 @@
 """Jurisdiction data adapters. No detector or prospect-ranking rules live here.
 
-Norfolk sources were verified on 2026-09-18. Chesapeake sources and the
-statewide VGIN orthophoto service were verified on 2026-09-20.
+Norfolk sources were verified on 2026-09-18. Chesapeake sources, Newport News
+sources, and the statewide VGIN orthophoto service were verified on 2026-09-20.
 Keep raw assessment classifications separate from the normalized detector context.
 """
 import re
@@ -40,6 +40,7 @@ PROFILES = {
     },
     "chesapeake": {
         "key": "chesapeake", "name": "Chesapeake",
+        "enabled": False,
         "default_address": "306 Cedar Rd", "default_radius": "1.0",
         "address": "https://gis.cityofchesapeake.net/mapping/rest/services/OpenData/OpenData/MapServer/1/query",
         "parcel": "https://gis.cityofchesapeake.net/mapping/rest/services/OpenData/OpenData/MapServer/15/query",
@@ -52,6 +53,21 @@ PROFILES = {
         "assessment": "https://gis.cityofchesapeake.net/mapping/rest/services/OpenData/OpenData/MapServer/30/query",
         "assessment_label": "Chesapeake Real Estate Parcel Class",
         "query_chunk": 1800, "require_buildings": True,
+    },
+    "newport_news": {
+        "key": "newport_news", "name": "Newport News",
+        "default_address": "500 J Clyde Morris Blvd", "default_radius": "0.5",
+        "address": "https://maps.nnva.gov/arcgis/rest/services/Operational/EnerGov/MapServer/0/query",
+        "parcel": "https://maps.nnva.gov/arcgis/rest/services/Operational/EnerGov/MapServer/6/query",
+        "parcel_fields": "OBJECTID,PARCELID,SITEADDRESS,PRPRTYDSCRP,USECD,USEDSCRP,CLASSCD,CLASSDSCRP,OWNERNME1,ZONE,VACANT,ASMT_LANDUSE,LATITUDE,LONGITUDE",
+        "building": "https://maps.nnva.gov/arcgis/rest/services/Operational/EnerGov/MapServer/11/query",
+        "building_source": "NEWPORT NEWS CITY", "building_where": "1=1",
+        "fallback_building": "https://dsfmportal.dcr.virginia.gov/server/rest/services/CivilReference/Civil_Reference_Layers/MapServer/2/query",
+        "imagery": "https://vginmaps.vdem.virginia.gov/arcgis/rest/services/VBMP_Imagery/MostRecentImagery_WGS/MapServer/export",
+        "imagery_kind": "map_server", "imagery_label": "VGIN VBMP most-recent imagery (2022/2023/2025)",
+        "assessment": "https://maps.nnva.gov/arcgis/rest/services/Operational/EnerGov/MapServer/6/query",
+        "assessment_label": "Newport News EnerGov parcel assessment",
+        "query_chunk": 2000, "require_buildings": True,
     },
 }
 
@@ -83,10 +99,16 @@ CHESAPEAKE_BUILDING_CONTEXT = {
     12: "INDUSTRIAL", 13: "COMMUNITY CENTER", 14: "APARTMENT",
 }
 
+# Newport News EnerGov Building Detail FEATURECODE domain.
+NEWPORT_NEWS_BUILDING_CONTEXT = {
+    "1": "RESIDENTIAL BUILDING", "2": "COMMERCIAL BUILDING",
+    "3": "PUBLIC BUILDING", "4": "MISCELLANEOUS STRUCTURE",
+}
+
 
 def get_profile(key="virginia_beach"):
     if key not in PROFILES:
-        raise ValueError(f"Unsupported territory: {key!r}. Select Chesapeake, Norfolk, or Virginia Beach.")
+        raise ValueError(f"Unsupported territory: {key!r}. Select Newport News, Norfolk, or Virginia Beach.")
     return PROFILES[key]
 
 
@@ -109,7 +131,7 @@ DIRECTIONS = {"NORTH": "N", "SOUTH": "S", "EAST": "E", "WEST": "W"}
 
 def canonical_address(text):
     text = text.split(",", 1)[0].upper().strip()
-    text = re.sub(r"\s+NORFOLK(?:\s+VA(?:\s+\d{5})?)?$", "", text)
+    text = re.sub(r"\s+(?:NORFOLK|NEWPORT NEWS|VIRGINIA BEACH|CHESAPEAKE)(?:\s+VA(?:\s+\d{5})?)?$", "", text)
     words = re.sub(r"[.\s]+", " ", text).strip().split()
     return " ".join(STREET_TYPES.get(w, DIRECTIONS.get(w, w)) for w in words)
 
@@ -143,6 +165,14 @@ def chesapeake_address_where(text):
     return "UPPER(ADDRESS) LIKE '" + normalized.replace("'", "''") + "%'"
 
 
+def newport_news_address_where(text):
+    """Match Newport News EnerGov base addresses while allowing unit-address records."""
+    normalized = canonical_address(text)
+    if not re.fullmatch(r"\d+\s+.+", normalized):
+        raise ValueError("Enter a Newport News street address, including its house number.")
+    return "UPPER(FULLADDR) LIKE '" + normalized.replace("'", "''") + "%'"
+
+
 def chesapeake_land_use(attributes, classes):
     """Return auditable Chesapeake parcel-class context for existing prescreen rules."""
     code = str(attributes.get("PROPCLASS") or "").strip()
@@ -151,6 +181,17 @@ def chesapeake_land_use(attributes, classes):
         description = "UNKNOWN PROPERTY CLASS" + ((" " + code) if code else "")
     project = str(attributes.get("PROJECT") or "").strip().upper()
     return " | ".join(x for x in (description, project) if x)
+
+
+def newport_news_land_use(attributes):
+    """Normalize auditable EnerGov assessment fields for the shared prescreen rules."""
+    values=[]
+    for field in ("ASMT_LANDUSE", "USEDSCRP", "CLASSDSCRP"):
+        value=" ".join(str(attributes.get(field) or "").upper().split())
+        if value and value not in values:values.append(value)
+    if str(attributes.get("VACANT") or "").strip().upper()=="Y" and "VACANT LAND" not in values:
+        values.append("VACANT LAND")
+    return " | ".join(values) or "UNKNOWN"
 
 
 def assessment_address(row):

@@ -10,8 +10,9 @@ from PIL import Image
 
 import app
 from territories import (ASSESSMENT_FIELDS,PROFILES,NORFOLK_BUILDING_CONTEXT,CHESAPEAKE_BUILDING_CONTEXT,
-                         assessment_address,assessment_choice,canonical_address,chesapeake_address_where,
-                         chesapeake_land_use,get_profile,norfolk_address_where,norfolk_land_use,numeric_id)
+                         NEWPORT_NEWS_BUILDING_CONTEXT,assessment_address,assessment_choice,canonical_address,
+                         chesapeake_address_where,chesapeake_land_use,get_profile,newport_news_address_where,
+                         newport_news_land_use,norfolk_address_where,norfolk_land_use,numeric_id)
 
 
 def assessment(use,description,**kwargs):
@@ -30,9 +31,10 @@ def square(lon=-76.28,lat=36.85,side=100):
 
 class TerritoryNormalizationTests(unittest.TestCase):
     def test_profiles_use_separate_city_sources(self):
-        vb,nf,ch=get_profile(),get_profile('norfolk'),get_profile('chesapeake')
-        for field in ('address','parcel','building','imagery'):
-            self.assertEqual(len({vb[field],nf[field],ch[field]}),3)
+        vb,nf,ch,nn=(get_profile(),get_profile('norfolk'),get_profile('chesapeake'),
+                     get_profile('newport_news'))
+        for field in ('address','parcel','building'):
+            self.assertEqual(len({vb[field],nf[field],ch[field],nn[field]}),4)
         self.assertEqual(nf['imagery_kind'],'map_server')
         self.assertEqual(vb['imagery_kind'],'image_server')
         self.assertIn('/AerialPhotos/2025/MapServer/export',nf['imagery'])
@@ -40,7 +42,10 @@ class TerritoryNormalizationTests(unittest.TestCase):
         self.assertIn('qva7-tzrf',nf['assessment'])
         self.assertIn('/OpenData/OpenData/MapServer/15/query',ch['parcel'])
         self.assertIn('MostRecentImagery_WGS/MapServer/export',ch['imagery'])
-        self.assertTrue(ch['require_buildings'])
+        self.assertIn('/Operational/EnerGov/MapServer/6/query',nn['parcel'])
+        self.assertIn('/Operational/EnerGov/MapServer/11/query',nn['building'])
+        self.assertEqual(nn['imagery'],ch['imagery'])
+        self.assertFalse(ch['enabled']);self.assertTrue(nn['require_buildings'])
 
     def test_unknown_territory_never_silently_uses_vb(self):
         with self.assertRaisesRegex(ValueError,'Unsupported territory'):get_profile('portsmouth')
@@ -60,6 +65,8 @@ class TerritoryNormalizationTests(unittest.TestCase):
         with self.assertRaises(ValueError):norfolk_address_where('City Hall')
         self.assertEqual(chesapeake_address_where('306 Cedar Road, Chesapeake, VA 23322'),
                          "UPPER(ADDRESS) LIKE '306 CEDAR RD%'")
+        self.assertEqual(newport_news_address_where('500 J Clyde Morris Boulevard, Newport News, VA 23601'),
+                         "UPPER(FULLADDR) LIKE '500 J CLYDE MORRIS BLVD%'")
 
     def test_chesapeake_class_and_building_context_is_descriptive(self):
         classes={'4341':'COMMERCIAL - MEDICAL OFFICE','1010':'RESIDENTIAL - SINGLE FAMILY'}
@@ -72,6 +79,14 @@ class TerritoryNormalizationTests(unittest.TestCase):
         self.assertEqual(CHESAPEAKE_BUILDING_CONTEXT[10],'HOSPITALITY HOTEL')
         self.assertEqual(CHESAPEAKE_BUILDING_CONTEXT[12],'INDUSTRIAL')
         self.assertNotIn('RESIDENTIAL',CHESAPEAKE_BUILDING_CONTEXT[1])
+
+    def test_newport_news_assessment_and_building_context_is_auditable(self):
+        attributes={'ASMT_LANDUSE':'Hospital','USEDSCRP':'HOSPITAL','CLASSDSCRP':'Commercial',
+                    'VACANT':'N'}
+        self.assertEqual(newport_news_land_use(attributes),'HOSPITAL | COMMERCIAL')
+        self.assertIn('VACANT LAND',newport_news_land_use({'USEDSCRP':'Industrial','VACANT':'Y'}))
+        self.assertEqual(NEWPORT_NEWS_BUILDING_CONTEXT['2'],'COMMERCIAL BUILDING')
+        self.assertEqual(NEWPORT_NEWS_BUILDING_CONTEXT['3'],'PUBLIC BUILDING')
 
     def test_assessment_address_is_site_not_owner_address(self):
         row={'property_street_number':'800.0','property_street_direction':'E','property_street_name':'City Hall',
@@ -179,6 +194,19 @@ class TerritoryRoutingTests(unittest.TestCase):
         self.assertEqual(params['where'],"UPPER(ADDRESS) LIKE '306 CEDAR RD%'")
         self.assertEqual(params['outFields'],'ADDRESS');self.assertEqual(params['outSR'],'4326')
 
+    def test_newport_news_geocode_uses_exact_city_address_layer(self):
+        hit={'attributes':{'FULLADDR':'500 J CLYDE MORRIS BLVD'},
+             'geometry':{'x':-76.483036,'y':37.064294}}
+        suite={'attributes':{'FULLADDR':'500 J CLYDE MORRIS BLVD, STE G'},
+               'geometry':{'x':-76.482508,'y':37.065348}}
+        with patch.object(app,'gj',return_value={'features':[hit,suite]}) as request:
+            self.assertEqual(app.geocode('500 J Clyde Morris Blvd','newport_news'),(-76.483036,37.064294))
+            self.assertEqual(app.geocode('500 J Clyde Morris Boulevard, Suite G','newport_news'),(-76.482508,37.065348))
+        url,params=request.call_args.args
+        self.assertEqual(url,get_profile('newport_news')['address'])
+        self.assertEqual(params['where'],"UPPER(FULLADDR) LIKE '500 J CLYDE MORRIS BLVD%'")
+        self.assertEqual(params['outFields'],'FULLADDR');self.assertEqual(params['outSR'],'4326')
+
     def test_vb_geocode_keeps_original_search_contract(self):
         meta={'fields':[{'name':'FULL_ADDR','type':'esriFieldTypeString'}]}
         hits={'features':[{'geometry':{'x':-76,'y':36.8}}]}
@@ -208,6 +236,27 @@ class TerritoryRoutingTests(unittest.TestCase):
         self.assertIn('CHESAPEAKE GOVERNMENT',row['land']);self.assertIn('CITY HALL COMPLEX',row['land'])
         self.assertEqual(row['facility_hint'],'CITY HALL COMPLEX');self.assertTrue(row['assessment_matched'])
         self.assertEqual(row['raw_classification'],'7410');self.assertEqual(query.call_args.args[1]['outSR'],'4326')
+
+    def test_newport_news_official_place_and_parcel_are_joined_by_parcel_id(self):
+        place={'attributes':{'OBJECTID':1,'PARCELID':'231000135','FULLADDR':'500 J CLYDE MORRIS BLVD',
+                             'PLACENAME':'Riverside Regional Medical Center','ADDRCLASS':'PRIMARY'}}
+        with patch.object(app,'pages',return_value=[place]) as query:
+            places=app.load_newport_news_places(-76.4830,37.0643,.5)
+        self.assertEqual(places['231000135']['facility'],'Riverside Regional Medical Center')
+        self.assertEqual(query.call_args.args[0],get_profile('newport_news')['address'])
+        self.assertEqual(query.call_args.args[1]['returnGeometry'],'false')
+
+        feature={'attributes':{'OBJECTID':7,'PARCELID':'231000135','SITEADDRESS':'502 J CLYDE MORRIS BLVD',
+                               'ASMT_LANDUSE':'Hospital','USECD':'600','USEDSCRP':'HOSPITAL',
+                               'CLASSCD':'C','CLASSDSCRP':'Commercial','OWNERNME1':'Riverside',
+                               'ZONE':'O2','VACANT':'N'},'geometry':{'rings':[square(lon=-76.4830,lat=37.0643)]}}
+        with patch.object(app,'load_newport_news_places',return_value=places),patch.object(app,'pages',return_value=[feature]) as parcel_query:
+            rows=app.load_parcels(-76.4830,37.0643,.5,'newport_news')
+        row=rows[0]
+        self.assertEqual(row['gpin'],'231000135');self.assertEqual(row['facility_hint'],'Riverside Regional Medical Center')
+        self.assertEqual(row['address'],'502 J CLYDE MORRIS BLVD');self.assertEqual(row['land'],'HOSPITAL | COMMERCIAL')
+        self.assertEqual(row['zone'],'O2');self.assertTrue(row['assessment_matched'])
+        self.assertEqual(parcel_query.call_args.args[1]['outSR'],'4326')
 
     def test_chesapeake_class_lookup_fails_closed_before_prescreen(self):
         with patch.object(app,'gj',return_value={'features':[]}):
@@ -259,6 +308,14 @@ class TerritoryRoutingTests(unittest.TestCase):
         self.assertEqual(rows[0]['fcode'],'MEDICAL');self.assertEqual(rows[0]['feature_code'],3)
         self.assertEqual(rows[0]['name'],'Regional Medical Center')
 
+    def test_newport_news_building_codes_and_height_are_retained(self):
+        feature={'attributes':{'OBJECTID':9,'FEATURECODE':2,'BLDGHEIGHT':48,'FLOORCOUNT':4},
+                 'geometry':{'rings':[square(lon=-76.4830,lat=37.0643,side=200)]}}
+        with patch.object(app,'pages',return_value=[feature]):
+            rows=app._query_buildings(get_profile('newport_news')['building'],-76.4830,37.0643,.5,'*',city='newport_news')
+        self.assertEqual(rows[0]['fcode'],'COMMERCIAL BUILDING');self.assertEqual(rows[0]['feature_code'],'2')
+        self.assertEqual(rows[0]['height'],48)
+
     def test_norfolk_no_footprints_stops_before_false_quiet_prescreen(self):
         with patch.object(app,'load_parcels',return_value=[]),patch.object(app,'load_osm_names',return_value=[]),patch.object(app,'load_buildings',return_value=([],'NONE',['service down'])):
             with self.assertRaisesRegex(RuntimeError,'stopped before prescreening'):app.discover(-76.28,36.85,.5,10000,'norfolk')
@@ -267,6 +324,11 @@ class TerritoryRoutingTests(unittest.TestCase):
         with patch.object(app,'load_parcels',return_value=[]),patch.object(app,'load_osm_names',return_value=[]),patch.object(app,'load_buildings',return_value=([],'NONE',['service down'])):
             with self.assertRaisesRegex(RuntimeError,'Chesapeake building footprints.*stopped before prescreening'):
                 app.discover(-76.28,36.85,.5,10000,'chesapeake')
+
+    def test_newport_news_no_footprints_stops_before_false_quiet_prescreen(self):
+        with patch.object(app,'load_parcels',return_value=[]),patch.object(app,'load_osm_names',return_value=[]),patch.object(app,'load_buildings',return_value=([],'NONE',['service down'])):
+            with self.assertRaisesRegex(RuntimeError,'Newport News building footprints.*stopped before prescreening'):
+                app.discover(-76.4830,37.0643,.5,10000,'newport_news')
 
     def test_discovery_records_candidate_cap_and_unmatched(self):
         parcels=[{'gpin':str(n),'address':f'{n} Test Rd','land':'UNKNOWN','zone':'','lon':-76.28,'lat':36.85,'rings':[square()], 'psq':10000,'assessment_matched':False} for n in range(251)]
@@ -282,10 +344,13 @@ class ImageryAndAuditTests(unittest.TestCase):
         vb,vp=app.image_request_params(-76.28,36.85,1000)
         nf,np=app.image_request_params(-76.28,36.85,1000,territory='norfolk')
         ch,cp=app.image_request_params(-76.28,36.85,1000,territory='chesapeake')
+        nn,nnp=app.image_request_params(-76.4830,37.0643,1000,territory='newport_news')
         self.assertNotEqual(vb,nf)
         self.assertEqual(len({vb,nf,ch}),3)
-        for params in (np,cp):
+        self.assertEqual(nn,ch)
+        for params in (np,cp,nnp):
             for key in ('bbox','bboxSR','imageSR','size','format'):
+                if params is nnp and key=='bbox':continue
                 self.assertEqual(vp[key],params[key])
         bounds=[float(x) for x in np['bbox'].split(',')]
         self.assertAlmostEqual(bounds[2]-bounds[0],304.8,places=5)
@@ -307,12 +372,13 @@ class ImageryAndAuditTests(unittest.TestCase):
     def test_source_fields_are_not_driven_by_current_selector(self):
         self.assertEqual(app.csv_source_fields({'territory':'norfolk'})['city'],'Norfolk')
         self.assertEqual(app.csv_source_fields({'territory':'chesapeake'})['city'],'Chesapeake')
+        self.assertEqual(app.csv_source_fields({'territory':'newport_news'})['city'],'Newport News')
         self.assertEqual(app.csv_source_fields({})['city'],'Virginia Beach')
 
     def test_scan_metadata_identifies_frozen_baseline_and_sources(self):
         d=app.make_scan_metadata([{'territory':'norfolk'}],{'truncated':True})
         self.assertEqual(d['detector_baseline_version'],'0.11.7');self.assertEqual(d['model_pipeline_version'],'0.0.12')
-        self.assertEqual(d['territory_logic_version'],'0.11.11')
+        self.assertEqual(d['territory_logic_version'],'0.11.12')
         self.assertEqual(d['data_sources'][0]['city'],'Norfolk');self.assertTrue(d['discovery']['truncated'])
 
     def test_all_campus_views_use_the_row_territory_and_manifest(self):
@@ -389,6 +455,8 @@ class AppStateTests(unittest.TestCase):
 
     def test_default_and_city_change_do_not_mix_existing_rows(self):
         self.assertEqual(self.ui.active_territory,'norfolk');self.assertEqual(self.ui.rad.get(),'0.5')
+        self.assertIn('Newport News',self.ui.cityb.options['values'])
+        self.assertNotIn('Chesapeake',self.ui.cityb.options['values'])
         self.ui.rows=[{'address':'Old Norfolk property'}];self.ui.last_scan_root='old';self.ui.review_csv_path='old'
         self.ui.city.set('Virginia Beach');self.ui.change_city()
         self.assertEqual(self.ui.active_territory,'virginia_beach');self.assertEqual(self.ui.rad.get(),'1.0')

@@ -2,12 +2,18 @@ HVAC Local Detector v0.0.12 — Model Card
 =========================================
 Intended use: commercial-HVAC sales prospecting triage from high-resolution overhead aerial imagery.
 
-v0.11.11 territory note: Chesapeake is now routed through official city address, parcel,
-parcel-class, and building-outline services plus VGIN VBMP most-recent orthophotos. This is an
-acquisition/territory expansion, not model retraining. A narrow Norfolk small-warehouse clutter
-control and a context-only manual-review route for >=100,000-ft2 Norfolk/Chesapeake medical campuses
-were added from field review. The latter does not claim detected equipment. Virginia Beach remains
-on its preserved v0.11.7 branch, and Chesapeake performance must be established by a fresh blind scan.
+v0.11.12 territory note: Newport News is routed through official city EnerGov address, parcel-
+assessment, and Building Detail layers plus VGIN VBMP most-recent orthophotos. This is an
+acquisition/territory expansion, not model retraining. Chesapeake is hidden from the deployment
+selector because its available scan imagery missed known high-value targets; its adapter is retained
+for a later imagery solution. The context-only manual-review route for >=100,000-ft2 medical campuses
+now includes Newport News and does not claim detected equipment. Norfolk and Virginia Beach detector
+behavior remains preserved, and Newport News performance must be established by a fresh blind scan.
+
+v0.11.11 territory note: Chesapeake was routed through official city address, parcel, parcel-class,
+and building-outline services plus VGIN imagery. Field testing later showed that imagery was not
+adequate for deployment, so v0.11.12 pauses the city. The narrow Norfolk small-warehouse clutter
+control and context-only medical-campus review route introduced in v0.11.11 remain.
 
 v0.11.10 territory note: the latest Norfolk blind scan exposed rescue-coverage and context failures,
 not a bad imagery download. Norfolk now uses a fully overlapping 4 x 4 zoom grid, a lower focus-view

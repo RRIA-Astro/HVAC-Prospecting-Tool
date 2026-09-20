@@ -52,7 +52,7 @@ class _Candidate:
 class FrozenDetectionLogicTests(unittest.TestCase):
     def test_frozen_primary_operating_points(self):
         self.assertEqual(app.DETECTOR_BASELINE_VERSION,"0.11.7")
-        self.assertEqual(app.TERRITORY_LOGIC_VERSION,"0.11.11")
+        self.assertEqual(app.TERRITORY_LOGIC_VERSION,"0.11.12")
         self.assertEqual((app.CANDIDATE_THRESHOLD,app.TOWER_CHILLER_THRESHOLD,app.LARGE_PACKAGED_THRESHOLD),(.07,.35,.45))
 
     def test_5925_target_is_well_inside_a_zoom_crop(self):

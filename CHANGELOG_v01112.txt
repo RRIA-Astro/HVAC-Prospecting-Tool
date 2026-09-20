@@ -1,0 +1,17 @@
+HVAC Territory Discovery v0.11.12 — Newport News Expansion
+==========================================================
+Date: 2026-09-20
+
+- Adds Newport News exact address lookup, official parcel-assessment discovery, official facility
+  names, official Building Detail footprints/types/heights, and source auditing.
+- Uses VGIN VBMP most-recent orthophotos for Newport News at the established projected frame and
+  pixel scale.
+- Stops Newport News discovery before prescreening when no required building footprints are
+  available, preventing a data-service outage from generating misleading QUIET results.
+- Extends the existing context-only >=100,000-ft2 medical-campus manual-review route to Newport News.
+- Hides Chesapeake from the selectable deployment cities after field scans showed inadequate
+  orthophoto detail. Its adapter remains available in source for future recovery and regression.
+- Preserves Norfolk and Virginia Beach detector behavior and all existing field controls.
+- Retains the complete 22,410,981-byte ResNet18 checkpoint.
+
+No model was retrained. Model hashes and primary thresholds remain unchanged.
