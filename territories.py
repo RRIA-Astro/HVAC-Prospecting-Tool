@@ -1,6 +1,7 @@
 """Jurisdiction data adapters. No detector or prospect-ranking rules live here.
 
-Sources were verified against public City of Norfolk services on 2026-09-18.
+Norfolk sources were verified on 2026-09-18. Chesapeake sources and the
+statewide VGIN orthophoto service were verified on 2026-09-20.
 Keep raw assessment classifications separate from the normalized detector context.
 """
 import re
@@ -19,7 +20,7 @@ PROFILES = {
         "imagery": "https://geo.vbgov.com/imageservices/rest/services/Imagery/Aerial2025/ImageServer/exportImage",
         "imagery_kind": "image_server", "imagery_label": "Virginia Beach aerial 2025",
         "assessment": "", "assessment_label": "Virginia Beach parcel attributes",
-        "query_chunk": 1800,
+        "query_chunk": 1800, "require_buildings": False,
     },
     "norfolk": {
         "key": "norfolk", "name": "Norfolk",
@@ -35,7 +36,22 @@ PROFILES = {
         "imagery_kind": "map_server", "imagery_label": "Norfolk aerial 2025",
         "assessment": "https://data.norfolk.gov/resource/qva7-tzrf.json",
         "assessment_label": "Norfolk Property Assessment and Sales FY27",
-        "query_chunk": 1000,
+        "query_chunk": 1000, "require_buildings": True,
+    },
+    "chesapeake": {
+        "key": "chesapeake", "name": "Chesapeake",
+        "default_address": "306 Cedar Rd", "default_radius": "1.0",
+        "address": "https://gis.cityofchesapeake.net/mapping/rest/services/OpenData/OpenData/MapServer/1/query",
+        "parcel": "https://gis.cityofchesapeake.net/mapping/rest/services/OpenData/OpenData/MapServer/15/query",
+        "parcel_fields": "OBJECTID,CALCACREAGE,PARNO,MAP_PARCEL,CNTRL_NO,ADDRESS,ADDRESSZIP,UNIT,PROJECT,PROPCLASS,ASSESSMNT_DIST",
+        "building": "https://gis.cityofchesapeake.net/mapping/rest/services/OpenData/OpenData/MapServer/4/query",
+        "building_source": "CHESAPEAKE CITY", "building_where": "1=1",
+        "fallback_building": "https://dsfmportal.dcr.virginia.gov/server/rest/services/CivilReference/Civil_Reference_Layers/MapServer/2/query",
+        "imagery": "https://vginmaps.vdem.virginia.gov/arcgis/rest/services/VBMP_Imagery/MostRecentImagery_WGS/MapServer/export",
+        "imagery_kind": "map_server", "imagery_label": "VGIN VBMP most-recent imagery (2022/2023/2025)",
+        "assessment": "https://gis.cityofchesapeake.net/mapping/rest/services/OpenData/OpenData/MapServer/30/query",
+        "assessment_label": "Chesapeake Real Estate Parcel Class",
+        "query_chunk": 1800, "require_buildings": True,
     },
 }
 
@@ -56,10 +72,21 @@ NORFOLK_BUILDING_CONTEXT = {
     2070: "OTHER BUILDING", 2080: "BUILDING UNDER CONSTRUCTION",
 }
 
+# Chesapeake OpenData Building Outlines BUILDINGCLASS coded-value domain. The
+# city's class 1 is explicitly "General/Residential"; call it GENERAL here so
+# an otherwise commercial parcel is not rejected as residential merely because
+# its footprint was not assigned a more specific class.
+CHESAPEAKE_BUILDING_CONTEXT = {
+    1: "GENERAL BUILDING", 2: "GOVERNMENT", 3: "MEDICAL", 4: "EDUCATION SCHOOL",
+    5: "TRANSPORTATION", 6: "COMMERCIAL", 7: "RELIGIOUS", 8: "RECREATION",
+    9: "CULTURAL HERITAGE", 10: "HOSPITALITY HOTEL", 11: "AIRPORT",
+    12: "INDUSTRIAL", 13: "COMMUNITY CENTER", 14: "APARTMENT",
+}
+
 
 def get_profile(key="virginia_beach"):
     if key not in PROFILES:
-        raise ValueError(f"Unsupported territory: {key!r}. Select Norfolk or Virginia Beach.")
+        raise ValueError(f"Unsupported territory: {key!r}. Select Chesapeake, Norfolk, or Virginia Beach.")
     return PROFILES[key]
 
 
@@ -106,6 +133,24 @@ def norfolk_address_where(text):
     if pre:
         where += f" AND UPPER(PRE_DIR) = '{pre}'"
     return where
+
+
+def chesapeake_address_where(text):
+    """Match the city's normalized full-address field without loose substring geocoding."""
+    normalized = canonical_address(text)
+    if not re.fullmatch(r"\d+\s+.+", normalized):
+        raise ValueError("Enter a Chesapeake street address, including its house number.")
+    return "UPPER(ADDRESS) LIKE '" + normalized.replace("'", "''") + "%'"
+
+
+def chesapeake_land_use(attributes, classes):
+    """Return auditable Chesapeake parcel-class context for existing prescreen rules."""
+    code = str(attributes.get("PROPCLASS") or "").strip()
+    description = str(classes.get(code) or "").strip().upper()
+    if not description:
+        description = "UNKNOWN PROPERTY CLASS" + ((" " + code) if code else "")
+    project = str(attributes.get("PROJECT") or "").strip().upper()
+    return " | ".join(x for x in (description, project) if x)
 
 
 def assessment_address(row):

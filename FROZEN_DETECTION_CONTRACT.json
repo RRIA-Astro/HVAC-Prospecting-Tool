@@ -1,6 +1,6 @@
 {
   "detector_baseline_version": "0.11.7",
-  "territory_logic_version": "0.11.10",
+  "territory_logic_version": "0.11.11",
   "constants": {
     "CANDIDATE_THRESHOLD": 0.07,
     "TOWER_CHILLER_THRESHOLD": 0.35,
@@ -83,9 +83,12 @@
     "thermal_detection_rankable": "251c3dc4a753abfdfbe891566166f8768f88575a72f038696439523919e72817",
     "commercial_rooftop_tower_review_only": "dc236a0c75498b877800976c2a4396725fe84d0f6447a3f2099fce31e8f0942a",
     "strategic_unverified_review": "2b6e25e9771df0375ca48b5ce0a13a798f89b7faaf673f03214884bf6e4baace",
-    "thermal_evidence": "d836f801468f2c36b43965b960798dd3904ea619a6de3dcb7ee364d477983650",
-    "triage_status": "7d25dabd5862fd4ef48e4e4d593316f7cab2224795190856cf8a7cec76da8dd4",
-    "hit_text": "757fe3aa078b0b35a69dedd0695cef93b6ebb6915343e0c03aac1226d3d314b7",
+    "thermal_evidence": "0f09e61ed38ec2d5d5edea451e5635513191a1d20a8e864d85067995fd4f237e",
+    "triage_status": "eb4308615bd82d365decd776dbe232b65276942d1c9d96bf0088ae930b0d3c34",
+    "hit_text": "2f76af6a9922df5039f678481349c5ae414cf2153dd0f90e61b861e412aa705c",
+    "norfolk_small_warehouse_clutter_reject": "ab3c0cf46cfc16675f65cfb99795d9b9c77419f880cd098505fb378899ef6f37",
+    "high_value_medical_manual_review": "81a7cbe32fe7068b9a33171e107f672b8b7e95222c00b5368ba4c727d109838f",
+    "urlopen_with_retry": "154895ea80875e7f1597c2b54cbe1288efa0a66dfa3a59a4bc0b7e97654ef6c7",
     "opportunity_score": "d65d9161fa37173d7dbc7ec448cfb6596b5354866fd1614fe8a5ea44142de658",
     "cross_property_same_machine": "853ab8e535c1d4774252fc5d8c6dd4cbb634f8a00169f75874dd04ecbb7cb656",
     "_cross_property_owner_key": "a2c7e5dbe45d65fc051ea1f1e0c202ec0f99d5462bc7daf18315bd9c40bf90ae",

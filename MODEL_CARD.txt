@@ -1,6 +1,13 @@
 HVAC Local Detector v0.0.12 — Model Card
 =========================================
-Intended use: commercial-HVAC sales prospecting triage from high-resolution Virginia Beach aerial imagery.
+Intended use: commercial-HVAC sales prospecting triage from high-resolution overhead aerial imagery.
+
+v0.11.11 territory note: Chesapeake is now routed through official city address, parcel,
+parcel-class, and building-outline services plus VGIN VBMP most-recent orthophotos. This is an
+acquisition/territory expansion, not model retraining. A narrow Norfolk small-warehouse clutter
+control and a context-only manual-review route for >=100,000-ft2 Norfolk/Chesapeake medical campuses
+were added from field review. The latter does not claim detected equipment. Virginia Beach remains
+on its preserved v0.11.7 branch, and Chesapeake performance must be established by a fresh blind scan.
 
 v0.11.10 territory note: the latest Norfolk blind scan exposed rescue-coverage and context failures,
 not a bad imagery download. Norfolk now uses a fully overlapping 4 x 4 zoom grid, a lower focus-view

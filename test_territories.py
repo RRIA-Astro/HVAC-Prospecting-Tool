@@ -9,8 +9,9 @@ from unittest.mock import patch,Mock
 from PIL import Image
 
 import app
-from territories import (ASSESSMENT_FIELDS,PROFILES,NORFOLK_BUILDING_CONTEXT,assessment_address,assessment_choice,
-                         canonical_address,get_profile,norfolk_address_where,norfolk_land_use,numeric_id)
+from territories import (ASSESSMENT_FIELDS,PROFILES,NORFOLK_BUILDING_CONTEXT,CHESAPEAKE_BUILDING_CONTEXT,
+                         assessment_address,assessment_choice,canonical_address,chesapeake_address_where,
+                         chesapeake_land_use,get_profile,norfolk_address_where,norfolk_land_use,numeric_id)
 
 
 def assessment(use,description,**kwargs):
@@ -29,17 +30,20 @@ def square(lon=-76.28,lat=36.85,side=100):
 
 class TerritoryNormalizationTests(unittest.TestCase):
     def test_profiles_use_separate_city_sources(self):
-        vb,nf=get_profile(),get_profile('norfolk')
+        vb,nf,ch=get_profile(),get_profile('norfolk'),get_profile('chesapeake')
         for field in ('address','parcel','building','imagery'):
-            self.assertNotEqual(vb[field],nf[field])
+            self.assertEqual(len({vb[field],nf[field],ch[field]}),3)
         self.assertEqual(nf['imagery_kind'],'map_server')
         self.assertEqual(vb['imagery_kind'],'image_server')
         self.assertIn('/AerialPhotos/2025/MapServer/export',nf['imagery'])
         self.assertNotIn('norfolk',vb['imagery'])
         self.assertIn('qva7-tzrf',nf['assessment'])
+        self.assertIn('/OpenData/OpenData/MapServer/15/query',ch['parcel'])
+        self.assertIn('MostRecentImagery_WGS/MapServer/export',ch['imagery'])
+        self.assertTrue(ch['require_buildings'])
 
     def test_unknown_territory_never_silently_uses_vb(self):
-        with self.assertRaisesRegex(ValueError,'Unsupported territory'):get_profile('chesapeake')
+        with self.assertRaisesRegex(ValueError,'Unsupported territory'):get_profile('portsmouth')
         with self.assertRaises(ValueError):app.image_request_params(-76.28,36.85,800,territory='unknown')
 
     def test_numeric_gpin_join_does_not_round_or_accept_sql(self):
@@ -54,6 +58,20 @@ class TerritoryNormalizationTests(unittest.TestCase):
         self.assertEqual(norfolk_address_where('600 Granby Street'),"HSE_NUM = 600 AND UPPER(ST_NAME) = 'GRANBY'")
         self.assertIn("O''BRIEN",norfolk_address_where("100 O'Brien Rd"))
         with self.assertRaises(ValueError):norfolk_address_where('City Hall')
+        self.assertEqual(chesapeake_address_where('306 Cedar Road, Chesapeake, VA 23322'),
+                         "UPPER(ADDRESS) LIKE '306 CEDAR RD%'")
+
+    def test_chesapeake_class_and_building_context_is_descriptive(self):
+        classes={'4341':'COMMERCIAL - MEDICAL OFFICE','1010':'RESIDENTIAL - SINGLE FAMILY'}
+        medical=chesapeake_land_use({'PROPCLASS':'4341','PROJECT':'Greenbrier Medical'},classes)
+        home=chesapeake_land_use({'PROPCLASS':'1010'},classes)
+        self.assertIn('MEDICAL',medical);self.assertIn('GREENBRIER MEDICAL',medical)
+        self.assertFalse(app.prescreen({'land':home,'zone':'','facility':'','facility_kind':'','fcodes':[],
+                                        'largest':50000,'avg':50000,'count':1,'buildings':[]},10000)[0])
+        self.assertEqual(CHESAPEAKE_BUILDING_CONTEXT[3],'MEDICAL')
+        self.assertEqual(CHESAPEAKE_BUILDING_CONTEXT[10],'HOSPITALITY HOTEL')
+        self.assertEqual(CHESAPEAKE_BUILDING_CONTEXT[12],'INDUSTRIAL')
+        self.assertNotIn('RESIDENTIAL',CHESAPEAKE_BUILDING_CONTEXT[1])
 
     def test_assessment_address_is_site_not_owner_address(self):
         row={'property_street_number':'800.0','property_street_direction':'E','property_street_name':'City Hall',
@@ -152,6 +170,15 @@ class TerritoryRoutingTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'More than one'):app.geocode('100 Main St','norfolk')
             self.assertEqual(app.geocode('100 E Main St','norfolk'),(-76.28,36.85))
 
+    def test_chesapeake_geocode_uses_exact_city_address_layer(self):
+        hit={'attributes':{'ADDRESS':'306 CEDAR RD'},'geometry':{'x':-76.2497,'y':36.71577}}
+        with patch.object(app,'gj',return_value={'features':[hit]}) as request:
+            self.assertEqual(app.geocode('306 Cedar Road','chesapeake'),(-76.2497,36.71577))
+        url,params=request.call_args.args
+        self.assertEqual(url,get_profile('chesapeake')['address'])
+        self.assertEqual(params['where'],"UPPER(ADDRESS) LIKE '306 CEDAR RD%'")
+        self.assertEqual(params['outFields'],'ADDRESS');self.assertEqual(params['outSR'],'4326')
+
     def test_vb_geocode_keeps_original_search_contract(self):
         meta={'fields':[{'name':'FULL_ADDR','type':'esriFieldTypeString'}]}
         hits={'features':[{'geometry':{'x':-76,'y':36.8}}]}
@@ -168,6 +195,23 @@ class TerritoryRoutingTests(unittest.TestCase):
         self.assertEqual(rows[0]['address'],'800 E City Hall AV');self.assertEqual(rows[0]['land'],'GOVERNMENT')
         self.assertTrue(rows[0]['assessment_matched']);self.assertEqual(query.call_args.args[1]['outSR'],'4326')
         self.assertEqual(query.call_args.kwargs['chunk'],1000)
+
+    def test_chesapeake_parcel_uses_class_table_and_official_project(self):
+        feature={'attributes':{'OBJECTID':8,'MAP_PARCEL':'0470000000830','ADDRESS':'208  CONQUEST DR ',
+                               'UNIT':'','PROJECT':'CITY HALL COMPLEX','PROPCLASS':'7410',
+                               'ASSESSMNT_DIST':'CEDAR ROAD CORRIDOR'},'geometry':{'rings':[square()]}}
+        classes={'7410':'EXEMPT - CHESAPEAKE GOVERNMENT'}
+        with patch.object(app,'load_chesapeake_classes',return_value=classes),patch.object(app,'pages',return_value=[feature]) as query:
+            rows=app.load_parcels(-76.28,36.85,.5,'chesapeake')
+        row=rows[0]
+        self.assertEqual(row['gpin'],'0470000000830');self.assertEqual(row['address'],'208 CONQUEST DR')
+        self.assertIn('CHESAPEAKE GOVERNMENT',row['land']);self.assertIn('CITY HALL COMPLEX',row['land'])
+        self.assertEqual(row['facility_hint'],'CITY HALL COMPLEX');self.assertTrue(row['assessment_matched'])
+        self.assertEqual(row['raw_classification'],'7410');self.assertEqual(query.call_args.args[1]['outSR'],'4326')
+
+    def test_chesapeake_class_lookup_fails_closed_before_prescreen(self):
+        with patch.object(app,'gj',return_value={'features':[]}):
+            with self.assertRaisesRegex(RuntimeError,'stopped before prescreening'):app.load_chesapeake_classes()
 
     def test_multi_part_norfolk_parcel_keeps_all_rings(self):
         features=[{'attributes':{'GPIN':'123','OBJECTID':n},'geometry':{'rings':[square(side=n*100)]}} for n in (1,2)]
@@ -207,9 +251,22 @@ class TerritoryRoutingTests(unittest.TestCase):
             _,source,errors=app.load_buildings(-76.28,36.85,.5,'norfolk')
         self.assertEqual(source,'VA CIVILREF');self.assertIn('city service down',errors[0])
 
+    def test_chesapeake_building_codes_and_names_are_retained(self):
+        feature={'attributes':{'OBJECTID':9,'BUILDINGCLASS':3,'NAME':'Regional Medical Center'},
+                 'geometry':{'rings':[square(side=200)]}}
+        with patch.object(app,'pages',return_value=[feature]):
+            rows=app._query_buildings(get_profile('chesapeake')['building'],-76.28,36.85,.5,'*',city='chesapeake')
+        self.assertEqual(rows[0]['fcode'],'MEDICAL');self.assertEqual(rows[0]['feature_code'],3)
+        self.assertEqual(rows[0]['name'],'Regional Medical Center')
+
     def test_norfolk_no_footprints_stops_before_false_quiet_prescreen(self):
         with patch.object(app,'load_parcels',return_value=[]),patch.object(app,'load_osm_names',return_value=[]),patch.object(app,'load_buildings',return_value=([],'NONE',['service down'])):
             with self.assertRaisesRegex(RuntimeError,'stopped before prescreening'):app.discover(-76.28,36.85,.5,10000,'norfolk')
+
+    def test_chesapeake_no_footprints_stops_before_false_quiet_prescreen(self):
+        with patch.object(app,'load_parcels',return_value=[]),patch.object(app,'load_osm_names',return_value=[]),patch.object(app,'load_buildings',return_value=([],'NONE',['service down'])):
+            with self.assertRaisesRegex(RuntimeError,'Chesapeake building footprints.*stopped before prescreening'):
+                app.discover(-76.28,36.85,.5,10000,'chesapeake')
 
     def test_discovery_records_candidate_cap_and_unmatched(self):
         parcels=[{'gpin':str(n),'address':f'{n} Test Rd','land':'UNKNOWN','zone':'','lon':-76.28,'lat':36.85,'rings':[square()], 'psq':10000,'assessment_matched':False} for n in range(251)]
@@ -224,21 +281,38 @@ class ImageryAndAuditTests(unittest.TestCase):
     def test_same_projected_frame_and_pixels_across_cities(self):
         vb,vp=app.image_request_params(-76.28,36.85,1000)
         nf,np=app.image_request_params(-76.28,36.85,1000,territory='norfolk')
+        ch,cp=app.image_request_params(-76.28,36.85,1000,territory='chesapeake')
         self.assertNotEqual(vb,nf)
-        for key in ('bbox','bboxSR','imageSR','size','format'):
-            self.assertEqual(vp[key],np[key])
+        self.assertEqual(len({vb,nf,ch}),3)
+        for params in (np,cp):
+            for key in ('bbox','bboxSR','imageSR','size','format'):
+                self.assertEqual(vp[key],params[key])
         bounds=[float(x) for x in np['bbox'].split(',')]
         self.assertAlmostEqual(bounds[2]-bounds[0],304.8,places=5)
-        self.assertEqual(np['layers'],'show:0')
+        self.assertEqual(np['layers'],'show:0');self.assertEqual(cp['layers'],'show:0')
+
+    def test_transient_503_is_retried_with_bounded_backoff(self):
+        error=app.urllib.error.HTTPError('https://example.test',503,'temporarily unavailable',None,None)
+        good=io.BytesIO(b'{"features":[]}')
+        with patch.object(app.urllib.request,'urlopen',side_effect=[error,good]) as request,patch.object(app.time,'sleep') as sleep:
+            self.assertEqual(app.gj('https://example.test',{'f':'json'}),{'features':[]})
+        self.assertEqual(request.call_count,2);sleep.assert_called_once_with(1.0)
+
+    def test_permanent_http_error_is_not_retried(self):
+        error=app.urllib.error.HTTPError('https://example.test',404,'not found',None,None)
+        with patch.object(app.urllib.request,'urlopen',side_effect=error) as request,patch.object(app.time,'sleep') as sleep:
+            with self.assertRaises(app.urllib.error.HTTPError):app.gj('https://example.test',{'f':'json'})
+        self.assertEqual(request.call_count,1);sleep.assert_not_called()
 
     def test_source_fields_are_not_driven_by_current_selector(self):
         self.assertEqual(app.csv_source_fields({'territory':'norfolk'})['city'],'Norfolk')
+        self.assertEqual(app.csv_source_fields({'territory':'chesapeake'})['city'],'Chesapeake')
         self.assertEqual(app.csv_source_fields({})['city'],'Virginia Beach')
 
     def test_scan_metadata_identifies_frozen_baseline_and_sources(self):
         d=app.make_scan_metadata([{'territory':'norfolk'}],{'truncated':True})
         self.assertEqual(d['detector_baseline_version'],'0.11.7');self.assertEqual(d['model_pipeline_version'],'0.0.12')
-        self.assertEqual(d['territory_logic_version'],'0.11.10')
+        self.assertEqual(d['territory_logic_version'],'0.11.11')
         self.assertEqual(d['data_sources'][0]['city'],'Norfolk');self.assertTrue(d['discovery']['truncated'])
 
     def test_all_campus_views_use_the_row_territory_and_manifest(self):

@@ -1,0 +1,16 @@
+HVAC Territory Discovery v0.11.11 — Chesapeake Expansion
+========================================================
+Date: 2026-09-20
+
+- Adds Chesapeake exact address lookup, parcel discovery, official parcel-class enrichment,
+  official building outlines/types, project/building facility hints, and source auditing.
+- Uses VGIN VBMP most-recent orthophotos for Chesapeake (current service: 2022/2023/2025 coverage).
+- Stops Chesapeake discovery before prescreening if required class or footprint data is unavailable.
+- Retries transient HTTP 429/500/502/503/504, connection, and timeout failures up to three attempts.
+- Adds the narrow 830 Poplar Hall small-warehouse perimeter-clutter rejection.
+- Keeps >=100,000-ft2 medical campuses in Norfolk and Chesapeake at REVIEW for manual HVAC review
+  even when fanless/obscured heat rejection produces no rankable CV evidence.
+- Preserves Virginia Beach behavior and every v0.11.10 Norfolk rule.
+- Restores and verifies the complete 22,410,981-byte ResNet18 checkpoint in the source package.
+
+No model was retrained. Model hashes and thresholds remain unchanged.

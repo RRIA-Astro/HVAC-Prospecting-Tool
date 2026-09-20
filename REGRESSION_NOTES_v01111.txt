@@ -1,0 +1,41 @@
+HVAC Territory Discovery v0.11.11 — Validation Notes
+====================================================
+
+Scope
+-----
+This release is primarily a territory adapter. Chesapeake routing uses official city address,
+parcel, parcel-class, and building-outline layers, plus the statewide VGIN VBMP orthophoto service.
+The projected frame, requested pixels, and physical view scales match the established pipeline.
+
+New field controls
+------------------
+- 830 Poplar Hall: one 9.28 x 6.37-ft zoom-rescue thermal box, 31.8 ft from the only building on a
+  10,625-ft2 Norfolk warehouse, is treated as isolated perimeter clutter and becomes QUIET.
+- 1309 Kempsville / Lake Taylor: a large medical campus remains REVIEW with context-only evidence
+  when fanless/obscured heat rejection is missed. The app does not claim equipment was detected.
+- Larger/closer machines, multiple thermal hypotheses, normal detections, non-warehouse sites,
+  Chesapeake sites, and Virginia Beach are protected from the 830 rule.
+
+Acquisition controls
+--------------------
+- Chesapeake address matching uses the normalized ADDRESS field, not loose substring metadata.
+- Parcel PROPCLASS values join to the official class table before prescreening.
+- BUILDINGCLASS coded values supply medical, education, hospitality, industrial, government,
+  apartment, and other context. General/Residential is normalized to GENERAL BUILDING so a generic
+  footprint does not falsely reject a commercial parcel as residential.
+- Missing required Chesapeake class/footprint data stops discovery.
+- Transient 503 and related statuses retry; permanent 404 errors do not retry.
+- Image JSON errors, blank exports, and wrong dimensions still stop before inference.
+
+Regression coverage
+-------------------
+The offline suite covers the new Chesapeake profiles, exact geocoding, class lookup, parcel parsing,
+building-code mapping, VGIN request parity, source metadata, fail-closed behavior, HTTP retries, both
+new field controls, prior Norfolk/Virginia Beach controls, checkpoint integrity, release identity,
+and workflow packaging. GitHub Actions additionally loads source and bundled models.
+
+Recommended validation
+----------------------
+Run a fresh Chesapeake area at 1.0 mile / 10,000 ft2. Review every STRONG and REVIEW result and a
+sample of QUIET results. Send the annotated CSV, then only the individual property folders needed
+to diagnose misses or ambiguous false positives.

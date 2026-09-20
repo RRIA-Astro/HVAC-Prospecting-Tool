@@ -1,173 +1,143 @@
-HVAC Territory Discovery v0.11.10 — Norfolk Rescue-Coverage Patch
-==================================================================
+HVAC Territory Discovery v0.11.11 — Chesapeake Expansion
+========================================================
 
 Purpose
 -------
-Commercial HVAC sales-prospecting triage from public aerial imagery. Discover parcels, apply
-the GIS prescreen, then analyze the passing sites locally as STRONG, REVIEW, or QUIET.
-This is a prospecting filter, not an engineering survey or equipment inventory. QUIET is not
-proof that valuable equipment is absent. Ambiguous evidence still requires salesperson review.
+Commercial-HVAC prospecting triage from public GIS and aerial imagery. The app discovers parcels,
+applies a precision-first GIS prescreen, and analyzes passing sites locally as STRONG, REVIEW, or
+QUIET. It is a prospecting filter, not an engineering survey. QUIET does not prove that valuable
+equipment is absent, and REVIEW still requires a salesperson to inspect the imagery.
 
 What changed
 ------------
-v0.11.10 applies the latest Norfolk blind-scan findings without globally lowering a model threshold.
-It preserves the established Virginia Beach branch and adds four bounded Norfolk-only safeguards:
+v0.11.11 adds Chesapeake as the third selectable city while preserving the v0.11.7 detector
+weights and primary thresholds. Chesapeake uses:
 
-  * Zoomed perimeter rescue now uses a fully overlapping 4 x 4 grid instead of a gapped 3 x 3 grid.
-    On an 1800-pixel source image this removes two 132-pixel blind bands on each axis.
-  * Norfolk priority sites use a 50,000-ft2 mechanical-focus floor. This gives 610 May Ave's
-    72,444-ft2 school building a higher-resolution view; the general 75,000-ft2 floor is unchanged.
-  * Hotels qualify for added focus/rescue only when they look substantial and urban/dense in GIS:
-    >=30,000-ft2 building footprint and >=30% parcel coverage. With missing parcel area, the floor
-    is >=60,000 ft2. Explicit convention identity qualifies at >=30,000 ft2. Low-rise suburban
-    hotels are deliberately not promoted. This targets 777 Waterside without making HOTEL a blanket
-    priority class.
-  * Rescue evidence on a <=100,000-ft2 single-building Norfolk site must be within 10 ft of the
-    parcel or within 5 ft of its joined building. This rejects the neighboring equipment at
-    601 E Brambleton while retaining genuine in-parcel and split-building evidence.
+  * City address points for exact search-center matching.
+  * City parcel polygons plus the official Real Estate Parcel Class table for prescreen context.
+  * City Building Outlines, including government, medical, education, hospitality, industrial,
+    commercial, airport, apartment, and other coded building types.
+  * Virginia Geographic Information Network's VBMP most-recent orthophoto service. Its current
+    service combines 2022, 2023, and 2025 Virginia imagery, with the newest available area on top.
 
-The 124 W Freemason grouped-equipment false positive may remain REVIEW by design. That ambiguity is
-preferable to a global restriction that could hide real prospects. Model weights and every primary,
-shifted-rescue, zoomed-rescue, ranking, and triage threshold are unchanged.
+Official Chesapeake project names and building names are retained as facility hints. Raw property
+class, class description, source URLs, imagery label, and footprint source are preserved in scan
+audit output. Chesapeake discovery stops before prescreening if its parcel-class table or both
+building-footprint sources fail, preventing a service outage from producing misleading QUIET rows.
 
-All v0.11.9 safeguards remain: split-parcel joined-building REVIEW attribution, distinct-building
-rescue selection, bounded public/institutional near-miss REVIEW, and rejected-rescue audit records.
+Transient network handling
+--------------------------
+ArcGIS, VGIN, and other HTTP reads now retry transient 429/500/502/503/504, connection, and timeout
+failures up to three total attempts with short bounded backoff. Permanent errors are returned
+immediately. Image validation still rejects JSON error pages, unreadable data, blank exports, and
+wrong-sized exports before inference.
 
-Norfolk remains selectable alongside Virginia Beach. The app starts with Norfolk selected,
-centered at 800 E City Hall Ave with a 0.5-mile radius. Select Virginia Beach to use its existing
-services, defaults, and v0.11.7 ranking behavior.
-
-Norfolk uses city address points, parcel boundaries, building polygons, and public 2025 aerial
-imagery. Parcel GPINs join to the city's daily-updated Property Assessment and Sales FY27 data.
-The adapter translates assessment classes into the descriptive context expected by the existing
-prescreen. Building-improvement classes take precedence over land-ownership classifications;
-a public owner is not proof of public building use. Commercial condos are not treated as homes.
-Self-storage, residential types, universities, hospitals, schools, and utilities are mapped
-explicitly. Raw classifications are retained for audit. Unmatched GPINs stay UNKNOWN and produce
-a warning; they are not assumed residential, public, or military. Assessment-service failures
-stop discovery instead of silently running an unvalidated prescreen.
-
-Norfolk's building service filters demolished structures and known non-building feature codes
-(water towers/storage tanks). Its public feature-code descriptions supplement institutional
-context. Both cities retain the existing Virginia Civil Reference footprint fallback, with the
-actual source recorded. Norfolk discovery stops if neither source returns usable footprints.
-
-Imagery is requested using the same projected frame, pixel count, and view scales as v0.11.7.
-Norfolk uses MapServer/export; Virginia Beach retains ImageServer/exportImage. The downloader
-rejects service error pages, wrong-sized exports, and completely blank images before inference.
-It never substitutes another city's imagery, an older year, or a lower-resolution basemap.
-
-Core detector and territory contract
-------------------------------------
-The v0.0.12 model files and primary operating points remain byte-for-byte unchanged from the
-v0.11.7 detector baseline. Virginia Beach rescue selection, attribution, and triage remain on that
-branch. v0.11.10 adds only the bounded Norfolk territory logic described above. Operating points stay:
-
-  Stage 1 candidate: 0.07
-  Tower/chiller verifier: 0.35
-  Large packaged verifier: 0.45
-
-Shifted rescue retains 0.015; zoomed perimeter rescue retains 0.008. This release does not retrain
-fanless-tower recognition. FROZEN_DETECTION_CONTRACT.json protects model hashes, core constants,
-the preserved baseline branch, and the explicit Norfolk logic in tests.
-JSON asset hashes normalize CRLF to LF to tolerate Windows Git checkout line endings. All other
-JSON bytes remain protected, and binary .pt model assets retain strict byte-for-byte hash checks.
-Virginia Beach's service URLs and normal discovery/ranking behavior remain available unchanged.
-
-Norfolk validation rerun
+Bounded Norfolk controls
 ------------------------
-1. Build and extract the Windows artifact as usual, keeping its entire folder together.
-2. Leave Norfolk selected. Start with the 0.5-mile radius and 10,000 ft2 size setting.
-3. Click Discover + Prescreen. Inspect the city, addresses, footprint source, and warnings.
-4. Aim for about 75-100 passing properties. Shrink/expand the radius if needed, then Analyze.
-5. Re-run the same 0.5-mile control area first. Confirm that Scope Arena, 610 May, and 777 Waterside
-   surface at least REVIEW; 601 E Brambleton becomes QUIET; and 124 W Freemason may remain REVIEW.
-6. Reconfirm the prior controls: 600 Church, 441 Bank, Scope Arena, and 333 Waterside surface while
-   110 W Main stays QUIET. Then move to a fresh Norfolk area.
+Two field-review findings are encoded without changing model weights or global thresholds:
 
-Discovery still displays at most 250 candidates, with prescreen-passing sites sorted first.
-The status line and metadata disclose when this cap is reached. Compare displayed passing sites
-with passing sites before the cap; if passing sites were truncated, reduce radius or use several
-overlapping searches. The cap warning can also mean only filtered/nonpassing rows were omitted.
-The scan covers the selected city's parcel inventory only, even when a radius crosses city limits.
+  * 830 Poplar Hall: one isolated zoom-rescue thermal hypothesis smaller than 10 x 7.5 ft, more
+    than 30 ft from the only building on a sub-15,000-ft2 Norfolk warehouse, no longer ranks.
+    Normal detections, larger/closer machines, multiple hypotheses, other property types, and other
+    cities are unaffected.
+  * Large medical campuses in Norfolk or Chesapeake with a building at least 100,000 ft2 remain
+    REVIEW even when CV has no rankable evidence. The evidence text explicitly says manual HVAC
+    review and does not claim a detected tower or chiller. This covers fanless/obscured heat
+    rejection such as the Lake Taylor miss.
 
-Shadows, tall-building roof displacement relative to footprints, imagery age, GIS completeness,
-and equipment concealed by screens/penthouses can affect results. The named controls validate
-the repair targets, not citywide accuracy; the next fresh-area run remains a blind generalization test.
+All v0.11.10 Norfolk behavior remains, including the overlapping perimeter-rescue grid, 50,000-ft2
+priority focus floor, urban/dense hotel rule, small-site rescue attribution check, split-parcel
+building ownership, distinct-building rescue selection, and public/institutional near-miss review.
+Virginia Beach stays on its preserved v0.11.7 branch.
+
+Detector contract
+-----------------
+No model was retrained. The v0.0.12 model assets and primary operating points remain:
+
+  Stage 1 candidate:             0.07
+  Tower/chiller verifier:       0.35
+  Large packaged verifier:      0.45
+  Shifted rescue candidate:     0.015
+  Zoomed perimeter candidate:   0.008
+
+FROZEN_DETECTION_CONTRACT.json protects model hashes, operating points, preserved detector logic,
+and the bounded territory rules. The complete ResNet18 checkpoint is 22,410,981 bytes with SHA256
+7dbdd679df66598a8d9e63f983507eb7900af9553595a3bb250ee6e4795e6ffd.
+
+Recommended Chesapeake blind test
+---------------------------------
+1. Build and extract the Windows artifact, keeping the entire folder together.
+2. Select Chesapeake. The default center is 306 Cedar Rd and the default radius is 1.0 mile.
+3. Leave the minimum building size at 10,000 ft2 for the first run.
+4. Click Discover + Prescreen. Confirm Chesapeake addresses, CHESAPEAKE CITY footprints, and the
+   VGIN imagery label. If more than 250 candidates are reported, reduce the radius.
+5. Analyze the passing properties. Review all STRONG and REVIEW sites and spot-check QUIET sites.
+6. Send prospecting_results.csv first. Send individual property folders only for definite misses,
+   confusing false positives, or unusually good controls; the full scan archive is not required.
+
+Use a genuinely new Chesapeake area for the first blind test. Avoid beginning at known controls,
+because the goal is to measure whether the existing detector generalizes to the new city's imagery.
+
+City behavior
+-------------
+The app starts with Norfolk selected. Changing the city clears discovered rows so data sources
+cannot be mixed. Each scan covers only the selected city's parcel inventory, even when its radius
+crosses a municipal boundary.
+
+Virginia Beach uses its 2025 ImageServer imagery and existing parcel/building services.
+Norfolk uses its 2025 MapServer imagery, city parcel/building services, and FY27 assessment join.
+Chesapeake uses city OpenData address/parcel/building/class layers and VGIN VBMP imagery.
+
+All cities retain the Virginia Civil Reference building-footprint fallback. The actual footprint
+source is recorded. Shadows, roof displacement, imagery age, tree cover, screened equipment,
+fanless towers, and incomplete GIS geometry can affect results.
 
 Output
 ------
-Results remain in Downloads/HVAC_Prospecting_Scan_<timestamp>/ with source/annotated images,
-per-property cv_result.json, source/view_manifest.json, and prospecting_results.csv.
-New audit output adds:
+Results are written to Downloads/HVAC_Prospecting_Scan_<timestamp>/:
 
-  SCAN_METADATA.json: release/baseline, actual source URLs, scan state, discovery/cap diagnostics.
-  DISCOVERY_AUDIT.json: the displayed candidates and their prescreen/assessment/footprint context.
-  CSV: city/territory, GPIN, coordinates, raw use/class, assessment match, footprint/imagery source.
-  cv_result.json: rescue_candidate_audit and rescue_candidate_decisions for verified rescue proposals.
+  prospecting_results.csv   ranked results plus user review and source fields
+  SCAN_METADATA.json        version, data sources, completion state, and discovery counts
+  DISCOVERY_AUDIT.json      displayed candidate and prescreen context
+  SCAN_SUMMARY.txt          concise run summary and limitations
+  <property>/source/        source aerial views and view_manifest.json
+  <property>/annotated/     annotated detector evidence
+  <property>/cv_result.json detector, attribution, rescue, and audit details
 
-Old Virginia Beach scan CSVs remain readable for review. New scan CSVs retain coordinates for
-Download Aerial. CSVs do not contain full parcel/building geometry; rediscover before reanalyzing.
-Review marks and notes continue to write to the existing results CSV.
+Discovery displays at most 250 candidates with prescreen-passing rows first. Metadata records the
+pre-limit counts and whether passing sites were omitted. Reduce the radius when passing properties
+were truncated.
 
 Build Windows EXE
 -----------------
-Upload the CONTENTS of this source folder to the GitHub repository root, including app.py,
-territories.py, release_identity.py, all three test files, FROZEN_DETECTION_CONTRACT.json,
-models/, and the included .github/workflows/build-windows.yml. Do not nest the project one
-folder deeper. Replace the workflow too; uploading app.py alone leaves the old build configuration.
+Upload the CONTENTS of this source folder to the GitHub repository root. Include app.py,
+territories.py, release_identity.py, all three test files, FROZEN_DETECTION_CONTRACT.json, models/,
+and .github/workflows/build-windows.yml. Do not upload the enclosing folder as an extra directory.
 
-The workflow reads APP_VERSION from app.py to derive the EXE/artifact names. Regression tests use
-stable filenames and check the detector baseline separately from the app release number, avoiding
-the stale v0.11.5/v0.11.6 version assertion failures encountered previously. Node-24 actions are used.
+The workflow derives the executable name from APP_VERSION, runs the full offline suite, validates
+checkpoint archives and hashes, loads the source models, builds the portable app, compares bundled
+model hashes to source, loads the bundled models, and publishes:
 
-Historical v0.11.8 build-check repair: if the original build failed only on the
-pipeline_config.json and verifier_runtime.json hashes, replace test_release_contract.py at the
-repository root with this corrected copy and commit. No model, configuration, app.py, or workflow
-replacement is required for this repair. Re-running the old failed commit will use the old test.
+  HVAC_Territory_Discovery_v01111_Windows.zip
 
-Historical v0.11.8 Stage-2 checkpoint repair: the initial Norfolk source package included a
-truncated resnet18_embedder_state_fp16.pt. This corrected package restores the complete original
-v0.11.7 checkpoint: 22,410,981 bytes; SHA256
-7dbdd679df66598a8d9e63f983507eb7900af9553595a3bb250ee6e4795e6ffd.
-The damaged copy was the exact first 22,071,296 bytes of that file, missing 339,685 trailing bytes.
-No training, weights, thresholds, or runtime detection logic were changed. The frozen contract's
-embedder hash now refers to the intact original instead of the damaged cached copy.
+Extract it and run HVAC_Territory_Discovery_v01111.exe. Keep the bundled files together.
 
-For this repair replace FOUR files in GitHub (paths are relative to the repository root):
-  models/resnet18_embedder_state_fp16.pt
-  FROZEN_DETECTION_CONTRACT.json
-  test_release_contract.py
-  .github/workflows/build-windows.yml
-Commit the replacements and use the new build run. Uploading the model alone leaves the old hash
-check; re-running an old commit still uses its old files. The binary is below GitHub's 25 MiB web
-upload limit. Updated README, changelog, regression notes, and model card are optional documentation.
-
-The 78-test suite opens each checkpoint and verifies all archive CRCs, with regressions for
-missing central directories, corrupted tensor bytes, and generic ZIPs that are not checkpoints.
-The workflow additionally loads the actual source models before PyInstaller, compares every
-bundled asset byte-for-byte with its source, and loads the bundled assets using the same LocalCV
-initializer. These checks do not run a full detector scan or launch the packaged Windows GUI.
-
-For this release the artifact is HVAC_Territory_Discovery_v01110_Windows.zip.
-Extract it and run HVAC_Territory_Discovery_v01110.exe. Keep its other bundled files intact.
-
-Source run / offline validation (Python 3.12)
---------------------------------------------
+Source validation (Python 3.12)
+-------------------------------
   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
   pip install -r requirements.txt
   python -m unittest -v test_detection_logic.py test_territories.py test_release_contract.py
   python app.py
 
-The automated suite does not require live GIS requests or load the ML runtime. It covers preserved
-Virginia Beach behavior, model/code hashes, the Norfolk field controls, classifications/joins,
-acquisition scale, error handling, auditing, and release packaging. Windows EXE assembly runs in GitHub Actions.
-Keep v0.10.1 as the separate training-safe labeling app.
+The offline tests mock GIS requests and do not perform a full detector scan. GitHub Actions performs
+the source/bundled model loading and Windows packaging checks.
 
-Official source references (verified 2026-09-18)
------------------------------------------------
+Official source references (verified 2026-09-20)
+------------------------------------------------
+https://gis.cityofchesapeake.net/mapping/rest/services/OpenData/OpenData/MapServer/1
+https://gis.cityofchesapeake.net/mapping/rest/services/OpenData/OpenData/MapServer/4
+https://gis.cityofchesapeake.net/mapping/rest/services/OpenData/OpenData/MapServer/15
+https://gis.cityofchesapeake.net/mapping/rest/services/OpenData/OpenData/MapServer/30
+https://vginmaps.vdem.virginia.gov/arcgis/rest/services/VBMP_Imagery/MostRecentImagery_WGS/MapServer
 https://www.norfolk.gov/1596/Geographic-Information-Systems
-https://gisshare.norfolk.gov/pubserver/rest/services/OpenData/Parcels/FeatureServer
-https://gisshare.norfolk.gov/server/rest/services/NORFOLKAIR/AIR_Basemap/MapServer/34
-https://gisshare.norfolk.gov/pubserver/rest/services/AerialPhotos/2025/MapServer
 https://data.norfolk.gov/Real-Estate/Property-Assessment-and-Sales-FY27/qva7-tzrf

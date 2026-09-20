@@ -52,7 +52,7 @@ class _Candidate:
 class FrozenDetectionLogicTests(unittest.TestCase):
     def test_frozen_primary_operating_points(self):
         self.assertEqual(app.DETECTOR_BASELINE_VERSION,"0.11.7")
-        self.assertEqual(app.TERRITORY_LOGIC_VERSION,"0.11.10")
+        self.assertEqual(app.TERRITORY_LOGIC_VERSION,"0.11.11")
         self.assertEqual((app.CANDIDATE_THRESHOLD,app.TOWER_CHILLER_THRESHOLD,app.LARGE_PACKAGED_THRESHOLD),(.07,.35,.45))
 
     def test_5925_target_is_well_inside_a_zoom_crop(self):
@@ -187,6 +187,30 @@ class FrozenDetectionLogicTests(unittest.TestCase):
         self.assertEqual(app.triage_status(adjoining,cv(17,7,1,13)),"QUIET")
         self.assertEqual(app.triage_status(dict(post,territory="virginia_beach"),cv(0,6,2)),"QUIET")
         self.assertIn("High-value rescue near miss 17",app.hit_text(cv(0,15,2),waterside))
+
+    def test_830_small_warehouse_isolated_perimeter_clutter_is_quiet(self):
+        site={"territory":"norfolk","land":"COMMERCIAL - STORAGE WAREHOUSE","zone":"",
+              "facility":"","facility_kind":"","fcodes":[],"largest":10625,"count":1,"buildings":[]}
+        clutter=detection("COOLING_TOWER",.91,.75,9.28,6.37,bd=31.8,rescue=True,review=True)
+        clutter["perimeter_rescue"]=True
+        cv={"detections":[clutter],"raw_detections":[clutter]}
+        self.assertTrue(app.thermal_detection_rankable(site,clutter))
+        self.assertTrue(app.norfolk_small_warehouse_clutter_reject(site,clutter,[clutter]))
+        self.assertEqual(app.triage_status(site,cv),"QUIET")
+        self.assertEqual(app.triage_status(dict(site,territory="chesapeake"),cv),"REVIEW")
+        larger=dict(clutter,long_ft=12.0)
+        self.assertFalse(app.norfolk_small_warehouse_clutter_reject(site,larger,[larger]))
+
+    def test_large_medical_campus_gets_context_only_manual_review(self):
+        cv={"detections":[],"raw_detections":[],"stage1_proposals":0,
+            "deep_rescue_verified":0,"perimeter_rescue_verified":0,"attribution_rejected":0}
+        site={"territory":"norfolk","land":"MEDICAL HEALTH CARE","zone":"","facility":"Lake Taylor",
+              "facility_kind":"","fcodes":[],"largest":150000,"count":2,"buildings":[]}
+        self.assertEqual(app.triage_status(site,cv),"REVIEW")
+        self.assertIn("manual HVAC review",app.hit_text(cv,site))
+        self.assertEqual(app.triage_status(dict(site,territory="chesapeake"),cv),"REVIEW")
+        self.assertEqual(app.triage_status(dict(site,territory="virginia_beach"),cv),"QUIET")
+        self.assertEqual(app.triage_status(dict(site,largest=99999),cv),"QUIET")
 
     def test_124_freemason_acceptable_review_is_not_overfit_away(self):
         z={"territory":"norfolk","land":"COMMERCIAL","largest":45090,"psq":30516,
