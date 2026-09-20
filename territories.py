@@ -1,7 +1,7 @@
 """Jurisdiction data adapters. No detector or prospect-ranking rules live here.
 
-Norfolk sources were verified on 2026-09-18. Chesapeake sources, Newport News
-sources, and the statewide VGIN orthophoto service were verified on 2026-09-20.
+Norfolk sources were verified on 2026-09-18. Chesapeake sources, Newport News,
+Hampton sources, and the statewide VGIN orthophoto service were verified on 2026-09-20.
 Keep raw assessment classifications separate from the normalized detector context.
 """
 import re
@@ -56,6 +56,7 @@ PROFILES = {
     },
     "newport_news": {
         "key": "newport_news", "name": "Newport News",
+        "enabled": False,
         "default_address": "500 J Clyde Morris Blvd", "default_radius": "0.5",
         "address": "https://maps.nnva.gov/arcgis/rest/services/Operational/EnerGov/MapServer/0/query",
         "parcel": "https://maps.nnva.gov/arcgis/rest/services/Operational/EnerGov/MapServer/6/query",
@@ -67,6 +68,23 @@ PROFILES = {
         "imagery_kind": "map_server", "imagery_label": "VGIN VBMP most-recent imagery (2022/2023/2025)",
         "assessment": "https://maps.nnva.gov/arcgis/rest/services/Operational/EnerGov/MapServer/6/query",
         "assessment_label": "Newport News EnerGov parcel assessment",
+        "query_chunk": 2000, "require_buildings": True,
+    },
+    "hampton": {
+        "key": "hampton", "name": "Hampton",
+        "default_address": "3000 Coliseum Dr", "default_radius": "0.5",
+        "address": "https://webgis3.hampton.gov/server/rest/services/Layers/MapServer/1/query",
+        "parcel": "https://webgis3.hampton.gov/server/rest/services/Layers/MapServer/0/query",
+        "parcel_fields": "OBJECTID,P_TYPE,LRSNTXT,LRSNINT,GPIN,SITUS,SQFT,ACREAGE",
+        "building": "https://webgis3.hampton.gov/server/rest/services/Web/CQ_Int1/MapServer/0/query",
+        "building_source": "HAMPTON CITY",
+        "building_where": "S_TYPE IN (1810,1820,1840,1850)",
+        "fallback_building": "https://dsfmportal.dcr.virginia.gov/server/rest/services/CivilReference/Civil_Reference_Layers/MapServer/2/query",
+        "imagery": "https://webgis3.hampton.gov/server/rest/services/Aerials_2026/MapServer/export",
+        "imagery_kind": "map_server", "imagery_layers": "show:13",
+        "imagery_label": "Hampton municipal aerial 2026",
+        "assessment": "https://webgis3.hampton.gov/server/rest/services/Web/CQ_RealEstate_Tables/MapServer/3/query",
+        "assessment_label": "Hampton Real Estate improvements",
         "query_chunk": 2000, "require_buildings": True,
     },
 }
@@ -105,10 +123,18 @@ NEWPORT_NEWS_BUILDING_CONTEXT = {
     "3": "PUBLIC BUILDING", "4": "MISCELLANEOUS STRUCTURE",
 }
 
+# Hampton CQ Buildings S_TYPE domain. Pools, tanks, towers, and sheds are
+# deliberately excluded by the profile query because they are not building
+# footprints and must not inflate the prescreen's building-size context.
+HAMPTON_BUILDING_CONTEXT = {
+    1810: "NONRESIDENTIAL BUILDING", 1820: "RESIDENTIAL BUILDING",
+    1840: "TRAILER HOME", 1850: "GARAGE",
+}
+
 
 def get_profile(key="virginia_beach"):
     if key not in PROFILES:
-        raise ValueError(f"Unsupported territory: {key!r}. Select Newport News, Norfolk, or Virginia Beach.")
+        raise ValueError(f"Unsupported territory: {key!r}. Select Hampton, Norfolk, or Virginia Beach.")
     return PROFILES[key]
 
 
@@ -131,7 +157,7 @@ DIRECTIONS = {"NORTH": "N", "SOUTH": "S", "EAST": "E", "WEST": "W"}
 
 def canonical_address(text):
     text = text.split(",", 1)[0].upper().strip()
-    text = re.sub(r"\s+(?:NORFOLK|NEWPORT NEWS|VIRGINIA BEACH|CHESAPEAKE)(?:\s+VA(?:\s+\d{5})?)?$", "", text)
+    text = re.sub(r"\s+(?:HAMPTON|NORFOLK|NEWPORT NEWS|VIRGINIA BEACH|CHESAPEAKE)(?:\s+VA(?:\s+\d{5})?)?$", "", text)
     words = re.sub(r"[.\s]+", " ", text).strip().split()
     return " ".join(STREET_TYPES.get(w, DIRECTIONS.get(w, w)) for w in words)
 
@@ -173,6 +199,14 @@ def newport_news_address_where(text):
     return "UPPER(FULLADDR) LIKE '" + normalized.replace("'", "''") + "%'"
 
 
+def hampton_address_where(text):
+    """Match Hampton's official full-address field while allowing unit records."""
+    normalized = canonical_address(text)
+    if not re.fullmatch(r"\d+\s+.+", normalized):
+        raise ValueError("Enter a Hampton street address, including its house number.")
+    return "UPPER(FullAdd) LIKE '" + normalized.replace("'", "''") + "%'"
+
+
 def chesapeake_land_use(attributes, classes):
     """Return auditable Chesapeake parcel-class context for existing prescreen rules."""
     code = str(attributes.get("PROPCLASS") or "").strip()
@@ -191,6 +225,23 @@ def newport_news_land_use(attributes):
         if value and value not in values:values.append(value)
     if str(attributes.get("VACANT") or "").strip().upper()=="Y" and "VACANT LAND" not in values:
         values.append("VACANT LAND")
+    return " | ".join(values) or "UNKNOWN"
+
+
+def hampton_land_use(rows):
+    """Prefer active nonresidential improvements while preserving campus variety.
+
+    Hampton's assessment table can contain dozens of improvements on one campus.
+    A residential dormitory must not erase a hospital, college, laboratory, or
+    other valuable commercial improvement on the same official parcel.
+    """
+    active=[r for r in rows if str(r.get("ImpStat") or "").strip().upper() in ("", "A")]
+    nonres=[r for r in active if str(r.get("ImprType") or "").strip().upper() not in ("DWELLING", "RESIDENTIAL")]
+    chosen=nonres or active
+    values=[]
+    for row in chosen:
+        value=" ".join(str(row.get("UseDesc") or row.get("UseCode") or row.get("BldgType") or row.get("ImprType") or "").upper().split())
+        if value and value not in values:values.append(value)
     return " | ".join(values) or "UNKNOWN"
 
 

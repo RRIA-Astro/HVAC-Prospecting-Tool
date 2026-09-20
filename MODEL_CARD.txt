@@ -2,13 +2,15 @@ HVAC Local Detector v0.0.12 — Model Card
 =========================================
 Intended use: commercial-HVAC sales prospecting triage from high-resolution overhead aerial imagery.
 
-v0.11.12 territory note: Newport News is routed through official city EnerGov address, parcel-
-assessment, and Building Detail layers plus VGIN VBMP most-recent orthophotos. This is an
-acquisition/territory expansion, not model retraining. Chesapeake is hidden from the deployment
-selector because its available scan imagery missed known high-value targets; its adapter is retained
-for a later imagery solution. The context-only manual-review route for >=100,000-ft2 medical campuses
-now includes Newport News and does not claim detected equipment. Norfolk and Virginia Beach detector
-behavior remains preserved, and Newport News performance must be established by a fresh blind scan.
+v0.11.13 territory note: Hampton is routed through official city address, parcel, real-estate
+improvement, and building-outline layers plus Hampton's 2026 municipal aerial service. Four known
+high-value locations were checked at the production frame before the adapter was enabled; the source
+preserved fan banks, piping, rooftop equipment, and building edges. This is an acquisition/territory
+expansion, not model retraining. Chesapeake and Newport News are hidden from the deployment selector
+because field scans showed their available scan imagery was not reliable enough for blind use; both
+adapters remain for a later imagery solution. The context-only manual-review route for >=100,000-ft2
+medical campuses now includes Hampton and does not claim detected equipment. Norfolk and Virginia
+Beach detector behavior remains preserved, and Hampton still requires a fresh blind scan.
 
 v0.11.11 territory note: Chesapeake was routed through official city address, parcel, parcel-class,
 and building-outline services plus VGIN imagery. Field testing later showed that imagery was not

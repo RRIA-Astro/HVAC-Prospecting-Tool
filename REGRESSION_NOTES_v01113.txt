@@ -1,0 +1,48 @@
+HVAC Territory Discovery v0.11.13 — Validation Notes
+====================================================
+
+Scope
+-----
+This release adds a Hampton data and imagery adapter. It does not retrain the detector or change
+primary inference thresholds. Newport News and Chesapeake remain covered by regression tests but
+are removed from the selectable UI until dependable high-resolution imagery is available.
+
+Acquisition controls
+--------------------
+- Hampton address matching uses normalized official FullAdd records and resolves coincident
+  base/leasehold points deterministically rather than treating them as an ambiguous address.
+- Parcel discovery retains LRSN, GPIN, SITUS, acreage, square footage, parcel type, assessment
+  attributes, and raw use/building codes for audit.
+- Official PlaceName records join to parcels by LRSN while leasehold-only names are ignored.
+- Real Estate improvements are fetched in bounded batches and the strongest active nonresidential
+  improvement supplies campus context without per-property web scraping.
+- Building S_TYPE values map to nonresidential, residential, trailer-home, or garage context; pools,
+  tanks, towers, and sheds cannot become building envelopes.
+- Missing required Hampton footprints stops discovery before prescreening.
+- Hampton image requests explicitly select Aerials_2026 layer 13 and preserve the existing Web
+  Mercator frame, physical side length, and 1800-pixel detector input. JSON errors, blank exports,
+  unreadable data, and wrong dimensions remain fatal.
+
+Live source validation
+----------------------
+- Four known mechanical sites were checked before implementation: Sentara CarePlex Hospital,
+  Hampton Roads Convention Center, Hampton Coliseum, and Hampton University. The 2026 imagery was
+  sharp enough to resolve fan banks, piping, rooftop equipment, and building edges.
+- A live 0.5-mile / 10,000-ft2 discovery centered on 3000 Coliseum Dr returned 506 parcels, 584
+  Hampton building footprints, 556 parcel/footprint joins, 54 candidates before the result cap, and
+  18 prescreen passes without source truncation.
+- A full CarePlex campus image acquisition produced 15 readable, correctly sized source frames.
+
+Detector controls
+-----------------
+- Detector baseline remains v0.11.7 with v0.0.12 model assets.
+- Primary operating points remain 0.07 / 0.35 / 0.45.
+- The only bounded territory-rule extension is that the existing context-only manual review for a
+  medical campus with a >=100,000-ft2 building now recognizes Hampton.
+- Prior Norfolk, Virginia Beach, Chesapeake, and Newport News adapter regressions remain in the suite.
+
+Recommended validation
+----------------------
+Run a genuinely new Hampton area at 0.5 mile / 10,000 ft2. Review every STRONG and REVIEW result and
+a sample of QUIET results. Send the annotated CSV first, followed only by individual property folders
+for definite misses, confusing false positives, or especially useful controls.

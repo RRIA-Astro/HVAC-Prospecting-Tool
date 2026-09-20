@@ -1,5 +1,5 @@
-HVAC Territory Discovery v0.11.12 — Newport News Expansion
-===========================================================
+HVAC Territory Discovery v0.11.13 — Hampton Expansion
+======================================================
 
 Purpose
 -------
@@ -10,32 +10,39 @@ equipment is absent, and REVIEW still requires a salesperson to inspect the imag
 
 What changed
 ------------
-v0.11.12 adds Newport News while preserving the v0.11.7 detector weights and primary thresholds.
-Newport News uses the city's official EnerGov address, parcel-assessment, and Building Detail
-layers. It retains official place names, use descriptions, classifications, zoning, ownership,
-building type, and building height in the discovery/audit path. Imagery comes from VGIN's VBMP
-most-recent orthophoto service. A live check at Riverside Regional Medical Center returned a clear
-1800 x 1800 export at the pipeline's established physical scale.
+v0.11.13 adds Hampton while preserving the v0.11.7 detector weights and primary thresholds.
+Hampton uses the city's official address/place-name, parcel, Real Estate improvement, and building-
+outline layers. It retains LRSN joins, facility names, use descriptions/codes, improvement types,
+and raw classifications in the discovery/audit path. Imagery comes from Hampton's 2026 municipal
+aerial service rather than statewide VGIN imagery.
 
-Chesapeake is paused because its available orthophotos were not reliable enough for deployment:
-known high-value targets were visibly clearer in Google Maps and were missed in the scan imagery.
-Chesapeake is hidden from the city selector, but its adapter and regression coverage remain in the
-source for a later imagery solution. It has not been silently rerouted to another city's data.
+The 2026 source was checked at the production 1800 x 1800 frame before implementation at Sentara
+CarePlex, Hampton Roads Convention Center, Hampton Coliseum, and Hampton University. Fan banks,
+piping, rooftop equipment, cars, and building edges remained sharply resolved. A live 0.5-mile
+discovery at 3000 Coliseum Dr returned 506 parcels, 584 Hampton building footprints, 556 footprint
+joins, and 18 prescreen-passing properties without truncation.
 
-Newport News safeguards
------------------------
-  * Search centers use normalized exact-address matching against official FULLADDR records.
-  * Parcels use official SITEADDRESS, assessment land use/use/class fields, zoning, and parcel IDs.
-  * Official PLACENAME address records are joined to parcels as facility hints.
-  * Building FEATURECODE values are retained as residential, commercial, public, or miscellaneous
-    context; BLDGHEIGHT is preserved when present.
-  * Discovery stops before prescreening if neither the Newport News nor statewide fallback building
-    source returns usable footprints, preventing a service outage from producing false QUIET rows.
+Chesapeake and Newport News are paused because field scans showed their available orthophotos were
+not reliable enough for blind deployment. Both are hidden from the city selector, but their adapters
+and regression coverage remain in source for a later imagery solution. Neither city is silently
+rerouted to another jurisdiction's data.
+
+Hampton safeguards
+------------------
+  * Search centers use normalized exact-address matching against official FullAdd records.
+  * Main, non-leasehold address points are preferred when a campus has duplicate address records.
+  * Parcels join to official address/place-name and assessment improvements by exact LRSN.
+  * Assessment requests are batched, not scraped property by property.
+  * Active nonresidential improvements control campus context when the same parcel also contains
+    dormitories or residences, preserving the one-good-building campus rule.
+  * Pools, tanks, towers, and sheds are excluded from the building-footprint query so they cannot
+    inflate building size or become false building centers.
+  * Discovery stops before prescreening if neither Hampton nor statewide fallback footprints return.
   * The existing context-only manual-review route for medical campuses with a building at least
-    100,000 ft2 now includes Newport News. It does not claim that equipment was detected.
+    100,000 ft2 now includes Hampton. It does not claim that equipment was detected.
 
-All prior Norfolk and Virginia Beach controls remain. Chesapeake remains callable in source for
-diagnostic/regression purposes but is not a selectable deployment city.
+All prior Norfolk and Virginia Beach controls remain. Chesapeake and Newport News remain callable
+in source for diagnostic/regression purposes but are not selectable deployment cities.
 
 Detector contract
 -----------------
@@ -51,30 +58,30 @@ FROZEN_DETECTION_CONTRACT.json protects model hashes, operating points, preserve
 and bounded territory rules. The complete ResNet18 checkpoint is 22,410,981 bytes with SHA256
 7dbdd679df66598a8d9e63f983507eb7900af9553595a3bb250ee6e4795e6ffd.
 
-Recommended Newport News blind test
------------------------------------
+Recommended Hampton blind test
+------------------------------
 1. Build and extract the Windows artifact, keeping the entire folder together.
-2. Select Newport News. The default center is 500 J Clyde Morris Blvd and the default radius is
+2. Select Hampton. The default center is 3000 Coliseum Dr and the default radius is
    0.5 mile.
 3. Leave the minimum building size at 10,000 ft2 for the first run.
-4. Click Discover + Prescreen. Confirm Newport News addresses, NEWPORT NEWS CITY footprints, and
-   the VGIN imagery label. If more than 250 candidates are reported, reduce the radius.
+4. Click Discover + Prescreen. Confirm Hampton addresses, HAMPTON CITY footprints, and Hampton
+   municipal aerial 2026 imagery. If more than 250 candidates are reported, reduce the radius.
 5. Analyze the passing properties. Review every STRONG and REVIEW result and spot-check QUIET sites.
 6. Send prospecting_results.csv first. Send individual property folders only for definite misses,
    confusing false positives, or unusually useful controls; the full scan archive is not required.
 
-Use a genuinely new Newport News area for the first blind test. This establishes how well the
-existing frozen detector generalizes to the city's imagery before any detector tuning.
+Use a genuinely new Hampton area for the first blind test. This establishes how well the existing
+frozen detector generalizes to the city's imagery before any detector tuning.
 
 City behavior
 -------------
-The app starts with Norfolk selected. Available cities are Newport News, Norfolk, and Virginia
-Beach. Changing the city clears discovered rows so data sources cannot be mixed. Each scan covers
-only the selected city's parcel inventory, even when its radius crosses a municipal boundary.
+The app starts with Norfolk selected. Available cities are Hampton, Norfolk, and Virginia Beach.
+Changing the city clears discovered rows so data sources cannot be mixed. Each scan covers only the
+selected city's parcel inventory, even when its radius crosses a municipal boundary.
 
 Virginia Beach uses its 2025 ImageServer imagery and existing parcel/building services. Norfolk
-uses its 2025 MapServer imagery, city parcel/building services, and FY27 assessment join. Newport
-News uses official EnerGov address/parcel/building layers and VGIN VBMP imagery.
+uses its 2025 MapServer imagery, city parcel/building services, and FY27 assessment join. Hampton
+uses official address/parcel/building/assessment layers and 2026 municipal aerial imagery.
 
 All active cities retain the Virginia Civil Reference building-footprint fallback. The actual
 footprint source is recorded. Shadows, roof displacement, imagery age, tree cover, screened
@@ -106,9 +113,9 @@ The workflow derives the executable name from APP_VERSION, runs the full offline
 checkpoint archives and hashes, loads the source models, builds the portable app, compares bundled
 model hashes to source, loads the bundled models, and publishes:
 
-  HVAC_Territory_Discovery_v01112_Windows.zip
+  HVAC_Territory_Discovery_v01113_Windows.zip
 
-Extract it and run HVAC_Territory_Discovery_v01112.exe. Keep the bundled files together.
+Extract it and run HVAC_Territory_Discovery_v01113.exe. Keep the bundled files together.
 
 Source validation (Python 3.12)
 -------------------------------
@@ -122,6 +129,11 @@ the source/bundled model loading and Windows packaging checks.
 
 Official source references (verified 2026-09-20)
 ------------------------------------------------
+https://webgis3.hampton.gov/server/rest/services/Layers/MapServer/1
+https://webgis3.hampton.gov/server/rest/services/Layers/MapServer/0
+https://webgis3.hampton.gov/server/rest/services/Web/CQ_Int1/MapServer/0
+https://webgis3.hampton.gov/server/rest/services/Web/CQ_RealEstate_Tables/MapServer/3
+https://webgis3.hampton.gov/server/rest/services/Aerials_2026/MapServer
 https://maps.nnva.gov/arcgis/rest/services/Operational/EnerGov/MapServer/0
 https://maps.nnva.gov/arcgis/rest/services/Operational/EnerGov/MapServer/6
 https://maps.nnva.gov/arcgis/rest/services/Operational/EnerGov/MapServer/11

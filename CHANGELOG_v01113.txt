@@ -1,0 +1,22 @@
+HVAC Territory Discovery v0.11.13 — Hampton Expansion
+=====================================================
+Date: 2026-09-20
+
+- Adds Hampton exact address lookup, official address/place-name enrichment, official parcel and
+  Real Estate improvement joins, official building footprints/types, and source auditing.
+- Uses Hampton's 2026 municipal aerial layer at the established projected frame, physical side
+  length, and 1800-pixel detector input.
+- Prefers the strongest active nonresidential improvement on multi-building Hampton campuses so a
+  dormitory or residential record cannot erase hospital, college, laboratory, or commercial context.
+- Excludes Hampton pools, tanks, towers, and sheds from building-envelope joins while retaining
+  nonresidential, residential, trailer-home, and garage structures.
+- Stops Hampton discovery before prescreening when required building footprints are unavailable,
+  preventing a data-service outage from generating misleading QUIET results.
+- Extends the existing context-only >=100,000-ft2 medical-campus manual-review route to Hampton.
+- Hides Newport News and Chesapeake from the selectable deployment cities after field scans showed
+  their available orthophotos were not reliable enough for blind prospecting. Their adapters remain
+  in source for future recovery and regression.
+- Preserves Norfolk and Virginia Beach detector behavior and all existing field controls.
+- Retains the complete 22,410,981-byte ResNet18 checkpoint.
+
+No model was retrained. Model hashes and primary thresholds remain unchanged.
