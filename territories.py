@@ -3,7 +3,8 @@
 Norfolk sources were verified on 2026-09-18. Chesapeake sources, Newport News,
 Hampton sources and the statewide VGIN orthophoto service were verified on 2026-09-20. Suffolk
 sources were verified on 2026-09-21. Portsmouth sources and municipal aerial tiles were verified
-on 2026-09-21.
+on 2026-09-21. Williamsburg parcel, address, building, and 2021 municipal orthophoto services were
+verified on 2026-09-21.
 Keep raw assessment classifications separate from the normalized detector context.
 """
 import re
@@ -122,6 +123,35 @@ PROFILES = {
         "assessment_label": "Portsmouth parcel assessment",
         "query_chunk": 2000, "require_buildings": True,
     },
+    "williamsburg": {
+        "key": "williamsburg", "name": "Williamsburg",
+        "default_address": "401 Lafayette St", "default_radius": "0.5",
+        "address": "https://gis.williamsburgva.gov/server/rest/services/Property_Addressing_Service/FeatureServer/1/query",
+        "parcel": "https://gis.williamsburgva.gov/server/rest/services/Tax_Parcels/MapServer/0/query",
+        "parcel_fields": ",".join((
+            "DBO.Tax_Parcels_Test.OBJECTID", "DBO.Tax_Parcels_Test.GPin",
+            "DBO.VW_RPT_GIS_Vision_All_Parcel_Data_Only.Current_Owner",
+            "DBO.VW_RPT_GIS_Vision_All_Parcel_Data_Only.Business_Name",
+            "DBO.VW_RPT_GIS_Vision_All_Parcel_Data_Only.Location",
+            "DBO.VW_RPT_GIS_Vision_All_Parcel_Data_Only.Primary_Use",
+            "DBO.VW_RPT_GIS_Vision_All_Parcel_Data_Only.State_Class_Code",
+            "DBO.VW_RPT_GIS_Vision_All_Parcel_Data_Only.Parcel_Usage",
+            "DBO.VW_RPT_GIS_Vision_All_Parcel_Data_Only.Zoning",
+            "DBO.VW_RPT_GIS_Vision_All_Parcel_Data_Only.Parcel_Name",
+            "DBO.VW_RPT_GIS_Vision_All_Parcel_Data_Only.Present_Land_Use",
+        )),
+        "parcel_oid": "DBO.Tax_Parcels_Test.OBJECTID",
+        "building": "https://gis.williamsburgva.gov/server/rest/services/Property_Information_Lookup/FeatureServer/1/query",
+        "building_source": "WILLIAMSBURG CITY",
+        "building_where": "UseIMS IS NULL OR UseIMS NOT IN (0,91,92,98,99)",
+        "fallback_building": "https://dsfmportal.dcr.virginia.gov/server/rest/services/CivilReference/Civil_Reference_Layers/MapServer/2/query",
+        "imagery": "https://gis.williamsburgva.gov/server/rest/services/DBO_wburg_orthoimagery_2021/MapServer/export",
+        "imagery_kind": "map_server", "imagery_layers": "show:0",
+        "imagery_label": "Williamsburg municipal orthophoto 2021",
+        "assessment": "https://gis.williamsburgva.gov/server/rest/services/Tax_Parcels/MapServer/0/query",
+        "assessment_label": "Williamsburg parcel assessment",
+        "query_chunk": 1000, "require_buildings": True,
+    },
 }
 
 ASSESSMENT_FIELDS = (
@@ -169,7 +199,7 @@ HAMPTON_BUILDING_CONTEXT = {
 
 def get_profile(key="virginia_beach"):
     if key not in PROFILES:
-        raise ValueError(f"Unsupported territory: {key!r}. Select Hampton, Norfolk, Portsmouth, or Virginia Beach.")
+        raise ValueError(f"Unsupported territory: {key!r}. Select Hampton, Norfolk, Portsmouth, Virginia Beach, or Williamsburg.")
     return PROFILES[key]
 
 
@@ -192,7 +222,7 @@ DIRECTIONS = {"NORTH": "N", "SOUTH": "S", "EAST": "E", "WEST": "W"}
 
 def canonical_address(text):
     text = text.split(",", 1)[0].upper().strip()
-    text = re.sub(r"\s+(?:HAMPTON|NORFOLK|NEWPORT NEWS|VIRGINIA BEACH|CHESAPEAKE|SUFFOLK|PORTSMOUTH)(?:\s+VA(?:\s+\d{5})?)?$", "", text)
+    text = re.sub(r"\s+(?:HAMPTON|NORFOLK|NEWPORT NEWS|VIRGINIA BEACH|CHESAPEAKE|SUFFOLK|PORTSMOUTH|WILLIAMSBURG)(?:\s+VA(?:\s+\d{5})?)?$", "", text)
     words = re.sub(r"[.\s]+", " ", text).strip().split()
     return " ".join(STREET_TYPES.get(w, DIRECTIONS.get(w, w)) for w in words)
 
@@ -286,6 +316,14 @@ def portsmouth_address_where(text):
     return " AND ".join(clauses)
 
 
+def williamsburg_address_where(text):
+    """Match Williamsburg's normalized official full-address field exactly."""
+    normalized = canonical_address(text)
+    if not re.fullmatch(r"\d+[A-Z]?\s+.+", normalized):
+        raise ValueError("Enter a Williamsburg street address, including its house number.")
+    return "UPPER(Address) = '" + normalized.replace("'", "''") + "'"
+
+
 def chesapeake_land_use(attributes, classes):
     """Return auditable Chesapeake parcel-class context for existing prescreen rules."""
     code = str(attributes.get("PROPCLASS") or "").strip()
@@ -341,6 +379,28 @@ def portsmouth_land_use(attributes):
     values=[]
     for field in ("BLDG_TYPE", "TYPE_PROP", "OWNER"):
         value=" ".join(str(attributes.get(field) or "").upper().split())
+        if value and value not in values:values.append(value)
+    return " | ".join(values) or "UNKNOWN"
+
+
+def qualified_value(attributes, field):
+    """Read either a plain ArcGIS field or a joined layer's qualified field name."""
+    if field in attributes:return attributes.get(field)
+    suffix="."+field.lower()
+    for key,value in attributes.items():
+        if str(key).lower().endswith(suffix):return value
+    return None
+
+
+def williamsburg_land_use(attributes):
+    """Retain Williamsburg assessor use, class, parcel name, and owner context."""
+    values=[]
+    for field in ("Parcel_Usage", "State_Class_Code", "Present_Land_Use", "Parcel_Name", "Business_Name", "Current_Owner"):
+        value=" ".join(str(qualified_value(attributes,field) or "").upper().split())
+        # This is Williamsburg's broad tax class, not evidence of an industrial use.
+        # Keep the exact source value separately in raw_classification.
+        if field=="State_Class_Code" and value=="COMMERCIAL-INDUSTRIAL":value="COMMERCIAL"
+        if value=="UNKNOWN":continue
         if value and value not in values:values.append(value)
     return " | ".join(values) or "UNKNOWN"
 

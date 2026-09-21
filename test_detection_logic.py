@@ -52,7 +52,7 @@ class _Candidate:
 class FrozenDetectionLogicTests(unittest.TestCase):
     def test_frozen_primary_operating_points(self):
         self.assertEqual(app.DETECTOR_BASELINE_VERSION,"0.11.7")
-        self.assertEqual(app.TERRITORY_LOGIC_VERSION,"0.11.15")
+        self.assertEqual(app.TERRITORY_LOGIC_VERSION,"0.11.16")
         self.assertEqual((app.CANDIDATE_THRESHOLD,app.TOWER_CHILLER_THRESHOLD,app.LARGE_PACKAGED_THRESHOLD),(.07,.35,.45))
 
     def test_5925_target_is_well_inside_a_zoom_crop(self):
@@ -187,6 +187,34 @@ class FrozenDetectionLogicTests(unittest.TestCase):
         self.assertEqual(app.triage_status(adjoining,cv(17,7,1,13)),"QUIET")
         self.assertEqual(app.triage_status(dict(post,territory="virginia_beach"),cv(0,6,2)),"QUIET")
         self.assertIn("High-value rescue near miss 17",app.hit_text(cv(0,15,2),waterside))
+
+    def test_large_public_seam_mechanical_candidate_is_review_only(self):
+        museum={"territory":"portsmouth","land":"MUSEUM | EXEMPT COMMERCIAL | CITY OF PORTSMOUTH",
+                "zone":"","facility":"Children's Museum","facility_kind":"","fcodes":[],
+                "largest":65000,"count":1,"buildings":[]}
+        package=detection("LARGE_PACKAGED_HVAC",.8845,.7984,69.2,33.7,bd=0,pd=12.6,
+                          kind="overview",seam=True)
+        cv={"detections":[package],"raw_detections":[package]}
+        self.assertFalse(app.package_rankable(museum,package,cv))
+        self.assertTrue(app.large_institutional_mechanical_review(museum,cv))
+        self.assertEqual(app.triage_status(museum,cv),"REVIEW")
+        self.assertIn("Large institutional mechanical candidate",app.hit_text(cv,museum))
+
+        jail=dict(museum,facility="Portsmouth Jail",land="GOVERNMENT | CITY OF PORTSMOUTH",largest=120000)
+        weaker=detection("LARGE_PACKAGED_HVAC",.6265,.2887,78.7,33.6,bd=0,pd=0,
+                         kind="overview",seam=True)
+        self.assertEqual(app.triage_status(jail,{"detections":[weaker],"raw_detections":[weaker]}),"REVIEW")
+
+        controls=(dict(museum,land="COMMERCIAL WAREHOUSE",facility="Warehouse"),
+                  dict(museum,largest=49999),dict(museum,territory="virginia_beach"))
+        for site in controls:
+            with self.subTest(site=site):self.assertEqual(app.triage_status(site,cv),"QUIET")
+        for changed in (dict(package,building_distance_ft=2),dict(package,best_class_prob=.279),dict(package,long_ft=59.9)):
+            with self.subTest(detection=changed):
+                self.assertEqual(app.triage_status(museum,{"detections":[changed],"raw_detections":[changed]}),"QUIET")
+        nonseam=dict(package,internal_tile_edge=False)
+        self.assertFalse(app.large_institutional_mechanical_review(museum,{"detections":[nonseam]}))
+        self.assertEqual(app.triage_status(museum,{"detections":[nonseam],"raw_detections":[nonseam]}),"STRONG")
 
     def test_830_small_warehouse_isolated_perimeter_clutter_is_quiet(self):
         site={"territory":"norfolk","land":"COMMERCIAL - STORAGE WAREHOUSE","zone":"",

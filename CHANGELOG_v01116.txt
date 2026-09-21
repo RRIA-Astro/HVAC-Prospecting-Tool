@@ -1,0 +1,34 @@
+HVAC Territory Discovery v0.11.16 — Williamsburg Expansion
+===========================================================
+
+Added
+-----
+* Williamsburg is available in the city selector.
+* Official Williamsburg address, assessor-enriched tax parcel, and building-footprint routes.
+* Exact official-address matching with nonresidential named-point preference.
+* Williamsburg parcel use, class, name, business, owner, zoning, and raw audit fields.
+* High-resolution Williamsburg 2021 municipal orthophoto exports.
+* Regression coverage for Williamsburg routing, joined fields, buildings, imagery, fail-closed
+  footprints, selector state, source metadata, and medical-campus safety.
+
+Changed
+-------
+* Williamsburg's generic "Commercial-Industrial" tax class is normalized to Commercial for the
+  prescreen, while its exact source value remains in raw_classification.
+* The two confirmed Portsmouth misses at the Children's Museum and city jail now receive REVIEW
+  when one seam-suppressed 60–95 ft packaged-mechanical candidate is centered on a >=50,000-ft2
+  public/institutional building and meets the recorded verifier gates.
+
+Safeguards
+----------
+* No model asset, inference pass, or detector confidence threshold changed.
+* The new public-site route is REVIEW-only, restricted to active good-imagery territories, and
+  excludes residential, storage-like, off-building, non-seam, undersized, and weak candidates.
+* Missing city and fallback footprints stop discovery before prescreening.
+* Chesapeake, Newport News, and Suffolk remain hidden pending dependable imagery.
+
+Live preflight
+--------------
+* 401 Lafayette St, 0.5 mile: 490 parcels, 1,087 footprints, 1,036 footprint joins, 22 prescreen passes.
+* Production 1800 x 1800 imagery at City Hall and the Williamsburg Lodge retained clear rooftop and
+  mechanical-equipment detail.

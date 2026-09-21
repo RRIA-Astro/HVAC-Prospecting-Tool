@@ -14,6 +14,7 @@ from territories import (ASSESSMENT_FIELDS,PROFILES,NORFOLK_BUILDING_CONTEXT,CHE
                          chesapeake_address_where,chesapeake_land_use,get_profile,newport_news_address_where,
                          newport_news_land_use,hampton_address_where,hampton_land_use,suffolk_address_where,suffolk_land_use,
                          portsmouth_address_where,portsmouth_land_use,
+                         williamsburg_address_where,williamsburg_land_use,qualified_value,
                          norfolk_address_where,norfolk_land_use,numeric_id)
 
 
@@ -33,11 +34,11 @@ def square(lon=-76.28,lat=36.85,side=100):
 
 class TerritoryNormalizationTests(unittest.TestCase):
     def test_profiles_use_separate_city_sources(self):
-        vb,nf,ch,nn,hm,sf,pm=(get_profile(),get_profile('norfolk'),get_profile('chesapeake'),
+        vb,nf,ch,nn,hm,sf,pm,wm=(get_profile(),get_profile('norfolk'),get_profile('chesapeake'),
                               get_profile('newport_news'),get_profile('hampton'),get_profile('suffolk'),
-                              get_profile('portsmouth'))
+                              get_profile('portsmouth'),get_profile('williamsburg'))
         for field in ('address','parcel','building'):
-            self.assertEqual(len({vb[field],nf[field],ch[field],nn[field],hm[field],sf[field],pm[field]}),7)
+            self.assertEqual(len({vb[field],nf[field],ch[field],nn[field],hm[field],sf[field],pm[field],wm[field]}),8)
         self.assertEqual(nf['imagery_kind'],'map_server')
         self.assertEqual(vb['imagery_kind'],'image_server')
         self.assertIn('/AerialPhotos/2025/MapServer/export',nf['imagery'])
@@ -55,6 +56,8 @@ class TerritoryNormalizationTests(unittest.TestCase):
         self.assertIn('/Parcels_new/FeatureServer/0/query',pm['parcel'])
         self.assertIn('/StandardLayers/FeatureServer/3/query',pm['building'])
         self.assertEqual(pm['imagery_kind'],'tile_server');self.assertIn('Aerials_2022/MapServer',pm['imagery'])
+        self.assertIn('gis.williamsburgva.gov',wm['parcel']);self.assertIn('orthoimagery_2021',wm['imagery'])
+        self.assertEqual(wm['imagery_kind'],'map_server');self.assertEqual(wm['imagery_layers'],'show:0')
         self.assertFalse(ch['enabled']);self.assertFalse(nn['enabled']);self.assertFalse(sf['enabled'])
         self.assertTrue(hm['require_buildings']);self.assertTrue(pm['require_buildings'])
 
@@ -86,6 +89,9 @@ class TerritoryNormalizationTests(unittest.TestCase):
         self.assertEqual(canonical_address('3636 High Street, Portsmouth, VA 23707'),'3636 HIGH ST')
         self.assertEqual(portsmouth_address_where('3636 High Street, Portsmouth, VA 23707'),
                          "ST_NUM = '3636' AND UPPER(ST_NAME) = 'HIGH'")
+        self.assertEqual(canonical_address('401 Lafayette Street, Williamsburg, VA 23185'),'401 LAFAYETTE ST')
+        self.assertEqual(williamsburg_address_where('401 Lafayette Street, Williamsburg, VA 23185'),
+                         "UPPER(Address) = '401 LAFAYETTE ST'")
 
     def test_chesapeake_class_and_building_context_is_descriptive(self):
         classes={'4341':'COMMERCIAL - MEDICAL OFFICE','1010':'RESIDENTIAL - SINGLE FAMILY'}
@@ -138,6 +144,18 @@ class TerritoryNormalizationTests(unittest.TestCase):
         self.assertTrue(app.prescreen({'land':land,'zone':'GMU','facility':'','facility_kind':'',
                                        'fcodes':[],'largest':171974,'avg':50000,'count':4,
                                        'buildings':[]},10000)[0])
+
+    def test_williamsburg_joined_fields_keep_use_without_false_industrial_priority(self):
+        prefix='DBO.VW_RPT_GIS_Vision_All_Parcel_Data_Only.'
+        attributes={prefix+'Parcel_Usage':'Office',prefix+'State_Class_Code':'Commercial-Industrial',
+                    prefix+'Present_Land_Use':'Unknown',prefix+'Parcel_Name':'The Hershberger Building',
+                    prefix+'Current_Owner':'Williamsburg LLC','DBO.Tax_Parcels_Test.GPin':'2914.123.456'}
+        self.assertEqual(qualified_value(attributes,'GPin'),'2914.123.456')
+        land=williamsburg_land_use(attributes)
+        self.assertEqual(land,'OFFICE | COMMERCIAL | THE HERSHBERGER BUILDING | WILLIAMSBURG LLC')
+        self.assertFalse(app.prescreen({'land':land,'zone':'B-1','facility':'','facility_kind':'',
+                                        'fcodes':[],'largest':4742,'avg':4742,'count':1,
+                                        'buildings':[]},10000)[0])
 
     def test_assessment_address_is_site_not_owner_address(self):
         row={'property_street_number':'800.0','property_street_direction':'E','property_street_name':'City Hall',
@@ -297,6 +315,19 @@ class TerritoryRoutingTests(unittest.TestCase):
         self.assertEqual(params['where'],"ST_NUM = '3636' AND UPPER(ST_NAME) = 'HIGH'")
         self.assertIn('Address_Ne',params['outFields'])
 
+    def test_williamsburg_geocode_uses_official_nonresidential_address_point(self):
+        home={'attributes':{'OBJECTID':2,'Address':'401 LAFAYETTE ST','Residential':1,'GPin':'2914.600.177'},
+              'geometry':{'x':-76.70940,'y':37.27580}}
+        city={'attributes':{'OBJECTID':1,'Address':'401 LAFAYETTE ST','Residential':2,
+                            'BusName':'City Building','GPin':'2914.600.177'},
+              'geometry':{'x':-76.70946,'y':37.27586}}
+        with patch.object(app,'gj',return_value={'features':[home,city]}) as request:
+            self.assertEqual(app.geocode('401 Lafayette St','williamsburg'),(-76.70946,37.27586))
+        url,params=request.call_args.args
+        self.assertEqual(url,get_profile('williamsburg')['address']);self.assertEqual(params['outSR'],'4326')
+        self.assertEqual(params['where'],"UPPER(Address) = '401 LAFAYETTE ST'")
+        self.assertIn('BusName',params['outFields'])
+
     def test_vb_geocode_keeps_original_search_contract(self):
         meta={'fields':[{'name':'FULL_ADDR','type':'esriFieldTypeString'}]}
         hits={'features':[{'geometry':{'x':-76,'y':36.8}}]}
@@ -409,6 +440,26 @@ class TerritoryRoutingTests(unittest.TestCase):
         self.assertEqual(parcel_query.call_args.args[1]['outSR'],'4326')
         self.assertEqual(parcel_query.call_args.args[1]['orderByFields'],'FID ASC')
 
+    def test_williamsburg_parcel_is_self_assessing_and_auditable(self):
+        base='DBO.Tax_Parcels_Test.';joined='DBO.VW_RPT_GIS_Vision_All_Parcel_Data_Only.'
+        feature={'attributes':{base+'OBJECTID':4170,base+'GPin':'2914.600.177',
+                               joined+'Current_Owner':'CITY OF WILLIAMSBURG',joined+'Business_Name':'City Building',
+                               joined+'Location':'401 LAFAYETTE ST ',joined+'Primary_Use':'E327',
+                               joined+'State_Class_Code':'Local Government (PSA)',joined+'Parcel_Usage':'Government Buildings ',
+                               joined+'Zoning':'B-1',joined+'Parcel_Name':'City Building',joined+'Present_Land_Use':'Unknown'},
+                 'geometry':{'rings':[square(lon=-76.70946,lat=37.27586,side=500)]}}
+        places={'2914.600.177':{'facility':'City Building','address':'401 LAFAYETTE ST','type':'Facil/Govt'}}
+        with patch.object(app,'load_williamsburg_places',return_value=places),\
+             patch.object(app,'pages',return_value=[feature]) as parcel_query:
+            rows=app.load_parcels(-76.70946,37.27586,.5,'williamsburg')
+        row=rows[0]
+        self.assertEqual(row['gpin'],'2914.600.177');self.assertEqual(row['address'],'401 LAFAYETTE ST')
+        self.assertIn('GOVERNMENT BUILDINGS',row['land']);self.assertEqual(row['facility_hint'],'City Building')
+        self.assertEqual(row['zone'],'B-1');self.assertTrue(row['assessment_matched'])
+        self.assertEqual(row['owner_name'],'CITY OF WILLIAMSBURG');self.assertIn('Local Government',row['raw_classification'])
+        self.assertEqual(parcel_query.call_args.args[1]['outSR'],'4326')
+        self.assertEqual(parcel_query.call_args.args[1]['orderByFields'],'DBO.Tax_Parcels_Test.OBJECTID ASC')
+
     def test_hampton_assessment_fetch_is_batched(self):
         feature={'attributes':{'LRSN':7001649,'UseDesc':'Hospital'}}
         with patch.object(app,'pages',return_value=[feature]) as request:
@@ -516,6 +567,17 @@ class TerritoryRoutingTests(unittest.TestCase):
             _,source,_=app.load_buildings(-76.34767,36.83650,.5,'portsmouth')
         self.assertEqual(source,'PORTSMOUTH CITY');self.assertEqual(query.call_args.args[6],2000)
 
+    def test_williamsburg_building_use_and_mixed_case_name_are_retained(self):
+        feature={'attributes':{'OBJECTID':9,'UseIMS':16,'UseDescrT':'Facil/Govt','Name':'City Building'},
+                 'geometry':{'rings':[square(lon=-76.70946,lat=37.27586,side=200)]}}
+        with patch.object(app,'pages',return_value=[feature]):
+            rows=app._query_buildings(get_profile('williamsburg')['building'],-76.70946,37.27586,.5,'*',city='williamsburg')
+        self.assertEqual(rows[0]['fcode'],'FACIL/GOVT');self.assertEqual(rows[0]['feature_code'],16)
+        self.assertEqual(rows[0]['name'],'City Building')
+        with patch.object(app,'_query_buildings',return_value=rows) as query:
+            _,source,_=app.load_buildings(-76.70946,37.27586,.5,'williamsburg')
+        self.assertEqual(source,'WILLIAMSBURG CITY');self.assertIn('UseIMS NOT IN',query.call_args.args[5])
+
     def test_norfolk_no_footprints_stops_before_false_quiet_prescreen(self):
         with patch.object(app,'load_parcels',return_value=[]),patch.object(app,'load_osm_names',return_value=[]),patch.object(app,'load_buildings',return_value=([],'NONE',['service down'])):
             with self.assertRaisesRegex(RuntimeError,'stopped before prescreening'):app.discover(-76.28,36.85,.5,10000,'norfolk')
@@ -545,6 +607,11 @@ class TerritoryRoutingTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'Portsmouth building footprints.*stopped before prescreening'):
                 app.discover(-76.34767,36.83650,.5,10000,'portsmouth')
 
+    def test_williamsburg_no_footprints_stops_before_false_quiet_prescreen(self):
+        with patch.object(app,'load_parcels',return_value=[]),patch.object(app,'load_osm_names',return_value=[]),patch.object(app,'load_buildings',return_value=([],'NONE',['service down'])):
+            with self.assertRaisesRegex(RuntimeError,'Williamsburg building footprints.*stopped before prescreening'):
+                app.discover(-76.70946,37.27586,.5,10000,'williamsburg')
+
     def test_discovery_records_candidate_cap_and_unmatched(self):
         parcels=[{'gpin':str(n),'address':f'{n} Test Rd','land':'UNKNOWN','zone':'','lon':-76.28,'lat':36.85,'rings':[square()], 'psq':10000,'assessment_matched':False} for n in range(251)]
         report={}
@@ -562,19 +629,26 @@ class ImageryAndAuditTests(unittest.TestCase):
         nn,nnp=app.image_request_params(-76.4830,37.0643,1000,territory='newport_news')
         hm,hmp=app.image_request_params(-76.39065,37.05681,1000,territory='hampton')
         sf,sfp=app.image_request_params(-76.5816,36.7731,1000,territory='suffolk')
+        wm,wmp=app.image_request_params(-76.70946,37.27586,1000,territory='williamsburg')
         self.assertNotEqual(vb,nf)
-        self.assertEqual(len({vb,nf,ch,hm}),4)
+        self.assertEqual(len({vb,nf,ch,hm,wm}),5)
         self.assertEqual(nn,ch)
         self.assertEqual(sf,ch)
-        for params in (np,cp,nnp,hmp,sfp):
+        for params in (np,cp,nnp,hmp,sfp,wmp):
             for key in ('bbox','bboxSR','imageSR','size','format'):
-                if params in (nnp,hmp,sfp) and key=='bbox':continue
+                if params in (nnp,hmp,sfp,wmp) and key=='bbox':continue
                 self.assertEqual(vp[key],params[key])
         bounds=[float(x) for x in np['bbox'].split(',')]
         self.assertAlmostEqual(bounds[2]-bounds[0],304.8,places=5)
         self.assertEqual(np['layers'],'show:0');self.assertEqual(cp['layers'],'show:0')
         self.assertEqual(hmp['layers'],'show:13')
         self.assertEqual(sfp['layers'],'show:0')
+        self.assertEqual(wmp['layers'],'show:0')
+
+    def test_williamsburg_requests_use_public_server_browser_headers(self):
+        headers=app.request_headers(get_profile('williamsburg')['parcel'])
+        self.assertIn('Mozilla/5.0',headers['User-Agent']);self.assertEqual(headers['Referer'],'https://gis.williamsburgva.gov/')
+        self.assertNotIn('Referer',app.request_headers(get_profile('norfolk')['parcel']))
 
     def test_portsmouth_uses_bounded_tile_mosaic_not_export(self):
         profile=get_profile('portsmouth')
@@ -612,12 +686,13 @@ class ImageryAndAuditTests(unittest.TestCase):
         self.assertEqual(app.csv_source_fields({'territory':'hampton'})['city'],'Hampton')
         self.assertEqual(app.csv_source_fields({'territory':'suffolk'})['city'],'Suffolk')
         self.assertEqual(app.csv_source_fields({'territory':'portsmouth'})['city'],'Portsmouth')
+        self.assertEqual(app.csv_source_fields({'territory':'williamsburg'})['city'],'Williamsburg')
         self.assertEqual(app.csv_source_fields({})['city'],'Virginia Beach')
 
     def test_scan_metadata_identifies_frozen_baseline_and_sources(self):
         d=app.make_scan_metadata([{'territory':'hampton'}],{'truncated':True})
         self.assertEqual(d['detector_baseline_version'],'0.11.7');self.assertEqual(d['model_pipeline_version'],'0.0.12')
-        self.assertEqual(d['territory_logic_version'],'0.11.15')
+        self.assertEqual(d['territory_logic_version'],'0.11.16')
         self.assertEqual(d['data_sources'][0]['city'],'Hampton');self.assertTrue(d['discovery']['truncated'])
 
     def test_all_campus_views_use_the_row_territory_and_manifest(self):
@@ -696,6 +771,7 @@ class AppStateTests(unittest.TestCase):
         self.assertEqual(self.ui.active_territory,'norfolk');self.assertEqual(self.ui.rad.get(),'0.5')
         self.assertIn('Hampton',self.ui.cityb.options['values'])
         self.assertIn('Portsmouth',self.ui.cityb.options['values'])
+        self.assertIn('Williamsburg',self.ui.cityb.options['values'])
         self.assertNotIn('Suffolk',self.ui.cityb.options['values'])
         self.assertNotIn('Newport News',self.ui.cityb.options['values'])
         self.assertNotIn('Chesapeake',self.ui.cityb.options['values'])

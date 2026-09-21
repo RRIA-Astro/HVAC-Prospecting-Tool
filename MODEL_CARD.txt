@@ -2,6 +2,16 @@ HVAC Local Detector v0.0.12 — Model Card
 =========================================
 Intended use: commercial-HVAC sales prospecting triage from high-resolution overhead aerial imagery.
 
+v0.11.16 territory note: Williamsburg is routed through official city address, assessor-enriched
+parcel, building-footprint, and 2021 municipal orthophoto services. Production-size frames at City
+Hall and the Williamsburg Lodge retained individual rooftop units, fan tops, curbs, and equipment
+clusters. No model was retrained and no detector threshold changed. A REVIEW-only territory-scoring
+safeguard covers the confirmed Portsmouth Children's Museum and jail misses: it requires explicit
+public/institutional context, a building at least 50,000 ft2, and one seam-suppressed 60–95 ft
+packaged-mechanical candidate centered on the serving building. This route cannot produce STRONG.
+Hampton, Norfolk, Portsmouth, and Virginia Beach model behavior remains preserved; Chesapeake,
+Newport News, and Suffolk remain paused for imagery reliability.
+
 v0.11.15 territory note: Portsmouth is routed through official city address, assessor-enriched parcel,
 and building-footprint services plus the city's 2022 high-resolution aerial tiles. A bounded, cached
 tile mosaic preserves the detector's 1800 x 1800 frame contract without changing model inference or

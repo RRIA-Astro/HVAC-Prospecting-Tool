@@ -1,5 +1,5 @@
-HVAC Territory Discovery v0.11.15 — Portsmouth Expansion
-=========================================================
+HVAC Territory Discovery v0.11.16 — Williamsburg Expansion
+===========================================================
 
 Purpose
 -------
@@ -10,19 +10,17 @@ equipment is absent, and REVIEW still requires a salesperson to inspect the imag
 
 What changed
 ------------
-v0.11.15 adds Portsmouth while preserving the v0.11.7 detector weights and operating thresholds.
-Portsmouth uses current city address points, assessor-enriched parcels, and official building
-footprints. Parcel building type, property type, owner, zoning, neighborhood, assessed building area,
-and raw classifications remain in the audit path.
+v0.11.16 adds Williamsburg while preserving the v0.11.7 detector weights and operating thresholds.
+Williamsburg uses the city's official address points, assessor-enriched tax parcels, building
+footprints, and 2021 municipal orthophoto. Parcel use, tax class, business/parcel name, owner, zoning,
+and raw classifications remain in the audit path. The broad Williamsburg "Commercial-Industrial"
+tax class is normalized to Commercial for prescreen context so a small office is not falsely treated
+as an industrial priority; the exact source class remains in the audit fields.
 
-Portsmouth publishes its 2022 municipal aerial as a high-resolution tiled service rather than an
-export endpoint. The app now assembles exact centered frames from bounded Web-Mercator tile mosaics,
-validates every tile, caches immutable tiles locally, and resizes only after the requested frame is
-cropped. The resulting 1800 x 1800 Maryview frame retains clear rooftop and mechanical-yard detail.
-
-A live 0.5-mile discovery centered at 3636 High St returned 1,208 parcels and 1,881 official
-Portsmouth building footprints, joined 1,764 footprints, and produced 33 prescreen-passing properties.
-The general 250-row display limit was reached, but all 33 passing properties were included first.
+Production-size orthophoto frames at City Hall and the Williamsburg Lodge retained individual rooftop
+units, fan tops, curbs, and equipment clusters. A live 0.5-mile discovery centered at 401 Lafayette St
+returned 490 parcels and 1,087 official building footprints, joined 1,036 footprints, and produced 22
+prescreen-passing properties with no candidate truncation.
 
 Suffolk is now paused after a blind field test produced three major high-value false negatives among
 the first five reviewed sites and only three REVIEW results across 107 candidates. Chesapeake and
@@ -30,17 +28,19 @@ Newport News remain paused for the same underlying deployment concern: their ava
 dependable enough for blind HVAC prospecting. All three adapters remain in source for diagnostics and
 future imagery replacements, but they are hidden from the city selector.
 
-Portsmouth safeguards
----------------------
-  * Search centers use normalized official address components and prefer primary, unitless records.
+Williamsburg safeguards
+-----------------------
+  * Search centers use the normalized official full-address field and prefer nonresidential named points.
   * Parcel assessment context comes from the same official polygon record; no secondary scrape or
     approximate assessment join is required.
   * City building footprints are required; discovery stops before prescreening if neither the
-    Portsmouth layer nor the statewide fallback returns usable footprints.
-  * Tile mosaics are limited to 100 tiles, checked for readable 256 x 256 imagery, cached by service
-    and coordinate, and rejected if the final frame is blank.
+    Williamsburg layer nor the statewide fallback returns usable footprints.
+  * Orthophoto exports are checked for JSON errors, exact dimensions, readable image data, and blank frames.
   * The existing context-only manual-review route for medical campuses with a building at least
-    100,000 ft2 includes Portsmouth. It does not claim that equipment was detected.
+    100,000 ft2 includes Williamsburg. It does not claim that equipment was detected.
+  * A new REVIEW-only safeguard covers the two confirmed Portsmouth public-site misses: one 60–95 ft
+    seam-suppressed packaged-mechanical candidate must be centered on a >=50,000-ft2 institutional
+    building and meet explicit verifier gates. It cannot produce STRONG and does not loosen detection.
 
 All prior Hampton, Norfolk, and Virginia Beach controls remain unchanged.
 
@@ -58,30 +58,31 @@ FROZEN_DETECTION_CONTRACT.json protects model hashes, operating points, preserve
 and bounded territory rules. The complete ResNet18 checkpoint is 22,410,981 bytes with SHA256
 7dbdd679df66598a8d9e63f983507eb7900af9553595a3bb250ee6e4795e6ffd.
 
-Recommended Portsmouth blind test
----------------------------------
+Recommended Williamsburg blind test
+-----------------------------------
 1. Build and extract the Windows artifact, keeping the entire folder together.
-2. Select Portsmouth. The default center is 3636 High St and the default radius is 0.5 mile.
+2. Select Williamsburg. The default center is 401 Lafayette St and the default radius is 0.5 mile.
 3. Leave the minimum building size at 10,000 ft2 for the first run.
-4. Click Discover + Prescreen. Confirm Portsmouth addresses, PORTSMOUTH CITY footprints, and
-   Portsmouth municipal aerial 2022 imagery. Reduce the radius if prescreen-passing rows are omitted.
+4. Click Discover + Prescreen. Confirm Williamsburg addresses, WILLIAMSBURG CITY footprints, and
+   Williamsburg municipal orthophoto 2021 imagery. Reduce the radius if prescreen-passing rows are omitted.
 5. Analyze the passing properties. Review every STRONG and REVIEW result and spot-check QUIET sites.
 6. Send prospecting_results.csv first. Send individual property folders only for definite misses,
    confusing false positives, or unusually useful controls; the full scan archive is not required.
 
-Use a genuinely new Portsmouth area rather than Maryview for the first blind test. Initial tile
-downloads can be slower than export imagery; overlapping later views reuse the local tile cache.
+Use a genuinely new Williamsburg area rather than the City Hall/Lodge preflight sites for the first blind test.
 
 City behavior
 -------------
-The app starts with Norfolk selected. Available cities are Hampton, Norfolk, Portsmouth, and Virginia Beach.
+The app starts with Norfolk selected. Available cities are Hampton, Norfolk, Portsmouth, Virginia Beach,
+and Williamsburg.
 Changing the city clears discovered rows so data sources cannot be mixed. Each scan covers only the
 selected city's parcel inventory, even when its radius crosses a municipal boundary.
 
 Virginia Beach uses its 2025 ImageServer imagery and existing parcel/building services. Norfolk
 uses its 2025 MapServer imagery, city parcel/building services, and FY27 assessment join. Hampton
 uses official address/parcel/building/assessment layers and 2026 municipal aerial imagery. Portsmouth
-uses official city address/parcel/building layers and 2022 municipal aerial tiles.
+uses official city address/parcel/building layers and 2022 municipal aerial tiles. Williamsburg uses
+official city address/parcel/building layers and 2021 municipal orthophoto exports.
 
 All active cities retain the Virginia Civil Reference building-footprint fallback. The actual
 footprint source is recorded. Shadows, roof displacement, imagery age, tree cover, screened
@@ -113,9 +114,9 @@ The workflow derives the executable name from APP_VERSION, runs the full offline
 checkpoint archives and hashes, loads the source models, builds the portable app, compares bundled
 model hashes to source, loads the bundled models, and publishes:
 
-  HVAC_Territory_Discovery_v01115_Windows.zip
+  HVAC_Territory_Discovery_v01116_Windows.zip
 
-Extract it and run HVAC_Territory_Discovery_v01115.exe. Keep the bundled files together.
+Extract it and run HVAC_Territory_Discovery_v01116.exe. Keep the bundled files together.
 
 Source validation (Python 3.12)
 -------------------------------
@@ -129,6 +130,10 @@ the source/bundled model loading and Windows packaging checks.
 
 Official source references (verified 2026-09-21)
 ------------------------------------------------
+https://gis.williamsburgva.gov/server/rest/services/Property_Addressing_Service/FeatureServer/1
+https://gis.williamsburgva.gov/server/rest/services/Tax_Parcels/MapServer/0
+https://gis.williamsburgva.gov/server/rest/services/Property_Information_Lookup/FeatureServer/1
+https://gis.williamsburgva.gov/server/rest/services/DBO_wburg_orthoimagery_2021/MapServer
 https://portsmouthgis.maps.arcgis.com/apps/webappviewer/index.html?id=2e16d709ed954e76b5b9828d79110bd4
 https://services1.arcgis.com/nGsguNiHLn7MU4R4/arcgis/rest/services/Portsmouth_Addresses/FeatureServer/0
 https://services1.arcgis.com/nGsguNiHLn7MU4R4/arcgis/rest/services/Parcels_new/FeatureServer/0

@@ -1,0 +1,39 @@
+HVAC Territory Discovery v0.11.16 — Validation Notes
+=====================================================
+
+Release scope
+-------------
+Williamsburg acquisition and territory routing plus one bounded REVIEW-only public-site scoring
+safeguard. The v0.11.7 detector baseline, v0.0.12 model assets, inference passes, and detector
+confidence thresholds are unchanged.
+
+Offline coverage
+----------------
+The release suite verifies:
+* exact Williamsburg address parsing and official address-layer routing;
+* nonresidential named-point preference on duplicate exact addresses;
+* joined parcel field access and self-contained assessment context;
+* the generic Commercial-Industrial class does not create false industrial priority;
+* official Williamsburg building use/name retention and fail-closed fallback behavior;
+* orthophoto export routing, browser-compatible public-server headers, and image safeguards;
+* selector isolation, scan metadata, and Williamsburg source audit fields;
+* the Portsmouth museum and jail REVIEW controls plus negative city, size, context, seam,
+  distance, dimension, and verifier-gate controls;
+* all prior frozen detector and city regression controls.
+
+Live service validation — 2026-09-21
+------------------------------------
+Exact address search succeeded for 401 Lafayette St. A 0.5-mile discovery returned 490 parcels and
+1,087 official Williamsburg building footprints, joined 1,036 footprints, and found 22 prescreen-
+passing properties without candidate truncation.
+
+Production 1800 x 1800 exports from the Williamsburg 2021 municipal orthophoto service succeeded at
+City Hall and the Williamsburg Lodge. Individual rooftop units, fan tops, curbs, and equipment
+clusters were visually distinct. Williamsburg therefore passed the imagery preflight used to reject
+Chesapeake, Newport News, and Suffolk for blind deployment.
+
+Recommended field test
+----------------------
+Run a genuinely new Williamsburg area at 0.5 mile and 10,000 ft2. Review every STRONG and REVIEW
+result, spot-check QUIET sites, and return prospecting_results.csv plus individual property folders
+for definite misses or confusing false positives.
