@@ -1,7 +1,8 @@
 """Jurisdiction data adapters. No detector or prospect-ranking rules live here.
 
 Norfolk sources were verified on 2026-09-18. Chesapeake sources, Newport News,
-Hampton sources, and the statewide VGIN orthophoto service were verified on 2026-09-20.
+Hampton sources and the statewide VGIN orthophoto service were verified on 2026-09-20. Suffolk
+sources were verified on 2026-09-21.
 Keep raw assessment classifications separate from the normalized detector context.
 """
 import re
@@ -87,6 +88,21 @@ PROFILES = {
         "assessment_label": "Hampton Real Estate improvements",
         "query_chunk": 2000, "require_buildings": True,
     },
+    "suffolk": {
+        "key": "suffolk", "name": "Suffolk",
+        "default_address": "2800 Godwin Blvd", "default_radius": "0.5",
+        "address": "https://suffolkgis.suffolk-va.net/hosting/rest/services/Parcel_Viewer/Parcels_and_Zoning/FeatureServer/0/query",
+        "parcel": "https://suffolkgis.suffolk-va.net/hosting/rest/services/Parcel_Viewer/Parcels_and_Zoning/FeatureServer/4/query",
+        "parcel_fields": "OBJECTID,NTI_ASSACCOUNTNUM,NTI_STREETNUMBER,NTI_STREETDIRECTION,NTI_STREETNAME,NTI_STREETMD,NTI_STREETSUFFIX,GPIN,ZONE_CLASS,PARCELSQFT,BORO_NAME",
+        "building": "https://suffolkgis.suffolk-va.net/hosting/rest/services/Parcel_Viewer/Parcels_and_Zoning/FeatureServer/2/query",
+        "building_source": "SUFFOLK CITY", "building_where": "1=1",
+        "fallback_building": "https://dsfmportal.dcr.virginia.gov/server/rest/services/CivilReference/Civil_Reference_Layers/MapServer/2/query",
+        "imagery": "https://vginmaps.vdem.virginia.gov/arcgis/rest/services/VBMP_Imagery/MostRecentImagery_WGS/MapServer/export",
+        "imagery_kind": "map_server", "imagery_label": "VGIN VBMP most-recent imagery (2022/2023/2025)",
+        "assessment": "https://suffolkgis.suffolk-va.net/hosting/rest/services/Parcel_Viewer/Parcels_and_Zoning/FeatureServer/10/query",
+        "assessment_label": "Suffolk parcel land-book assessment",
+        "query_chunk": 2000, "require_buildings": True,
+    },
 }
 
 ASSESSMENT_FIELDS = (
@@ -134,7 +150,7 @@ HAMPTON_BUILDING_CONTEXT = {
 
 def get_profile(key="virginia_beach"):
     if key not in PROFILES:
-        raise ValueError(f"Unsupported territory: {key!r}. Select Hampton, Norfolk, or Virginia Beach.")
+        raise ValueError(f"Unsupported territory: {key!r}. Select Hampton, Norfolk, Suffolk, or Virginia Beach.")
     return PROFILES[key]
 
 
@@ -157,7 +173,7 @@ DIRECTIONS = {"NORTH": "N", "SOUTH": "S", "EAST": "E", "WEST": "W"}
 
 def canonical_address(text):
     text = text.split(",", 1)[0].upper().strip()
-    text = re.sub(r"\s+(?:HAMPTON|NORFOLK|NEWPORT NEWS|VIRGINIA BEACH|CHESAPEAKE)(?:\s+VA(?:\s+\d{5})?)?$", "", text)
+    text = re.sub(r"\s+(?:HAMPTON|NORFOLK|NEWPORT NEWS|VIRGINIA BEACH|CHESAPEAKE|SUFFOLK)(?:\s+VA(?:\s+\d{5})?)?$", "", text)
     words = re.sub(r"[.\s]+", " ", text).strip().split()
     return " ".join(STREET_TYPES.get(w, DIRECTIONS.get(w, w)) for w in words)
 
@@ -207,6 +223,29 @@ def hampton_address_where(text):
     return "UPPER(FullAdd) LIKE '" + normalized.replace("'", "''") + "%'"
 
 
+def suffolk_address_where(text):
+    """Match Suffolk address components without loose substring geocoding."""
+    normalized = canonical_address(text)
+    match = re.fullmatch(r"(\d+[A-Z]?)\s+(.+)", normalized)
+    if not match:
+        raise ValueError("Enter a Suffolk street address, including its house number.")
+    number, street = match.groups()
+    words = street.split()
+    pre = words.pop(0) if words and words[0] in ("N", "S", "E", "W", "NE", "NW", "SE", "SW") else ""
+    known_types = set(STREET_TYPES.values()) | {"AVE", "ST", "RD", "BLVD", "DR", "CT", "CIR", "LN", "PL", "PKWY", "TER", "HWY", "TRL", "SQ"}
+    street_type = words.pop() if words and words[-1] in known_types else ""
+    if not words:
+        raise ValueError("Enter the street name as well as its house number.")
+    safe_number=number.replace("'", "''")
+    clauses = [f"ADDRNUMBER = '{safe_number}'",
+               "UPPER(ADDRNAME) = '" + " ".join(words).replace("'", "''") + "'"]
+    if pre:
+        clauses.append("UPPER(ADDRDIRECTION) = '" + pre + "'")
+    if street_type:
+        clauses.append("UPPER(ADDRSTTYPE) = '" + street_type + "'")
+    return " AND ".join(clauses)
+
+
 def chesapeake_land_use(attributes, classes):
     """Return auditable Chesapeake parcel-class context for existing prescreen rules."""
     code = str(attributes.get("PROPCLASS") or "").strip()
@@ -242,6 +281,18 @@ def hampton_land_use(rows):
     for row in chosen:
         value=" ".join(str(row.get("UseDesc") or row.get("UseCode") or row.get("BldgType") or row.get("ImprType") or "").upper().split())
         if value and value not in values:values.append(value)
+    return " | ".join(values) or "UNKNOWN"
+
+
+def suffolk_land_use(rows):
+    """Retain Suffolk's assessor use, neighborhood, and class descriptions."""
+    values=[]
+    for row in rows:
+        for field in ("building_use", "NBHD_Name", "property_class"):
+            value=" ".join(str(row.get(field) or "").upper().split())
+            if field=="building_use" and value in ("MINI-WAREHOUSE", "MINI WAREHOUSE"):
+                value="SELF STORAGE"
+            if value and value not in values:values.append(value)
     return " | ".join(values) or "UNKNOWN"
 
 

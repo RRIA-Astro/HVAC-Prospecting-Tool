@@ -2,6 +2,15 @@ HVAC Local Detector v0.0.12 — Model Card
 =========================================
 Intended use: commercial-HVAC sales prospecting triage from high-resolution overhead aerial imagery.
 
+v0.11.14 territory note: Suffolk is routed through official city address, parcel, building-footprint,
+and parcel land-book services plus statewide VGIN VBMP imagery. Production-size frames at Sentara
+Obici Hospital, King's Fork High School, QVC, and the Harbour View medical campus retained usable
+equipment and building detail, although bright white warehouse roofs can lose contrast. This is an
+acquisition/territory expansion, not model retraining. The detector weights, inference paths, and
+thresholds remain frozen. The existing context-only review for >=100,000-ft2 medical campuses is
+extended to Suffolk without asserting detected equipment. Hampton, Norfolk, and Virginia Beach behavior remains preserved;
+Chesapeake and Newport News remain hidden pending better imagery.
+
 v0.11.13 territory note: Hampton is routed through official city address, parcel, real-estate
 improvement, and building-outline layers plus Hampton's 2026 municipal aerial service. Four known
 high-value locations were checked at the production frame before the adapter was enabled; the source

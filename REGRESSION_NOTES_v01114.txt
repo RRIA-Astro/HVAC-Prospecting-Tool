@@ -1,0 +1,47 @@
+HVAC Territory Discovery v0.11.14 — Validation Notes
+=====================================================
+
+Release scope
+-------------
+Suffolk acquisition and territory routing only. The v0.11.7 detector baseline and v0.0.12 model
+assets are unchanged. FROZEN_DETECTION_CONTRACT.json continues to verify all protected detector,
+ranking, attribution, and rescue nodes plus model hashes and operating points.
+
+Offline coverage
+----------------
+The release suite verifies:
+* exact Suffolk address parsing and city-service routing;
+* base-address preference when a property has multiple suite points;
+* official place-name and parcel joins by assessor account;
+* batched, quoted land-book requests;
+* auditable use, neighborhood, class, owner, zoning, GPIN, and borough fields;
+* multi-part parcel grouping and strict-radius behavior inherited from the shared adapter;
+* official Suffolk building footprints and retained conversion codes;
+* fail-closed behavior when both city and fallback footprints are unavailable;
+* projected 1800 x 1800 VGIN imagery request parity;
+* selector isolation, scan metadata, and source audit fields;
+* MINI-WAREHOUSE normalization to SELF STORAGE;
+* Suffolk coverage for the existing context-only >=100,000-ft2 medical-campus review safety;
+* all prior frozen detector and city regression controls.
+
+Live service validation — 2026-09-21
+------------------------------------
+Exact address searches succeeded for:
+* 2800 Godwin Blvd;
+* 351 Kings Fork Rd;
+* 1 QVC Dr;
+* 5818 Harbour View Blvd.
+
+A 0.5-mile discovery at 2800 Godwin Blvd returned 857 parcels and 888 official Suffolk building
+footprints, joined 851 footprints, produced 144 candidates and 20 prescreen passes, and did not hit
+the 250-row limit. Three parcels without a land-book match remained UNKNOWN.
+
+Production 1800 x 1800 imagery exports succeeded at all four addresses. Obici, King's Fork, and
+Harbour View retained strong equipment-scale detail. QVC remained usable but demonstrated the
+known lower-contrast behavior of very bright white roofs.
+
+Recommended field test
+----------------------
+Run a genuinely new Suffolk area at 0.5 mile and 10,000 ft2. Review every STRONG and REVIEW result,
+spot-check QUIET sites, and return prospecting_results.csv plus individual folders for definite
+misses or confusing false positives.

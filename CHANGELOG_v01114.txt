@@ -1,0 +1,31 @@
+HVAC Territory Discovery v0.11.14 — Suffolk Expansion
+======================================================
+
+Added
+-----
+* Suffolk is available in the city selector.
+* Official Suffolk address, parcel, building-footprint, and parcel land-book routes.
+* Exact assessor-account joins for facility, assessment, owner, and parcel audit fields.
+* Suffolk-specific exact address matching with primary/base-address preference.
+* VGIN VBMP imagery routing using the same 1800 x 1800 projected-frame contract.
+* Suffolk regression coverage for routing, joins, batching, imagery, fail-closed footprints,
+  selector state, source metadata, and source audit fields.
+
+Safeguards
+----------
+* No model asset, confidence threshold, inference pass, or existing-city ranking rule changed.
+* Unmatched land-book rows remain UNKNOWN and are counted in discovery warnings.
+* Missing city and fallback footprints stop discovery before prescreening.
+* Suffolk MINI-WAREHOUSE use is normalized to SELF STORAGE so it cannot inherit the existing
+  warehouse-priority path.
+* The existing context-only >=100,000-ft2 medical-campus review safety applies to Suffolk; it does
+  not claim that equipment was detected.
+* Chesapeake and Newport News remain hidden pending a better imagery source.
+
+Live preflight
+--------------
+* 2800 Godwin Blvd, 0.5 mile: 857 parcels, 888 footprints, 851 footprint joins,
+  144 candidates, 20 prescreen passes, 3 unmatched assessment records.
+* 1800 x 1800 imagery exports succeeded at Sentara Obici Hospital, King's Fork High School,
+  QVC, and the Harbour View medical campus.
+* Bright white roofs can reduce contrast; this remains a documented Suffolk limitation.

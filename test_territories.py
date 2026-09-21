@@ -12,7 +12,8 @@ import app
 from territories import (ASSESSMENT_FIELDS,PROFILES,NORFOLK_BUILDING_CONTEXT,CHESAPEAKE_BUILDING_CONTEXT,
                          NEWPORT_NEWS_BUILDING_CONTEXT,HAMPTON_BUILDING_CONTEXT,assessment_address,assessment_choice,canonical_address,
                          chesapeake_address_where,chesapeake_land_use,get_profile,newport_news_address_where,
-                         newport_news_land_use,hampton_address_where,hampton_land_use,norfolk_address_where,norfolk_land_use,numeric_id)
+                         newport_news_land_use,hampton_address_where,hampton_land_use,suffolk_address_where,suffolk_land_use,
+                         norfolk_address_where,norfolk_land_use,numeric_id)
 
 
 def assessment(use,description,**kwargs):
@@ -31,10 +32,10 @@ def square(lon=-76.28,lat=36.85,side=100):
 
 class TerritoryNormalizationTests(unittest.TestCase):
     def test_profiles_use_separate_city_sources(self):
-        vb,nf,ch,nn,hm=(get_profile(),get_profile('norfolk'),get_profile('chesapeake'),
-                        get_profile('newport_news'),get_profile('hampton'))
+        vb,nf,ch,nn,hm,sf=(get_profile(),get_profile('norfolk'),get_profile('chesapeake'),
+                           get_profile('newport_news'),get_profile('hampton'),get_profile('suffolk'))
         for field in ('address','parcel','building'):
-            self.assertEqual(len({vb[field],nf[field],ch[field],nn[field],hm[field]}),5)
+            self.assertEqual(len({vb[field],nf[field],ch[field],nn[field],hm[field],sf[field]}),6)
         self.assertEqual(nf['imagery_kind'],'map_server')
         self.assertEqual(vb['imagery_kind'],'image_server')
         self.assertIn('/AerialPhotos/2025/MapServer/export',nf['imagery'])
@@ -47,7 +48,9 @@ class TerritoryNormalizationTests(unittest.TestCase):
         self.assertEqual(nn['imagery'],ch['imagery'])
         self.assertIn('/Aerials_2026/MapServer/export',hm['imagery'])
         self.assertEqual(hm['imagery_layers'],'show:13')
-        self.assertFalse(ch['enabled']);self.assertFalse(nn['enabled']);self.assertTrue(hm['require_buildings'])
+        self.assertIn('/Parcel_Viewer/Parcels_and_Zoning/FeatureServer/4/query',sf['parcel'])
+        self.assertIn('/FeatureServer/2/query',sf['building']);self.assertEqual(sf['imagery'],ch['imagery'])
+        self.assertFalse(ch['enabled']);self.assertFalse(nn['enabled']);self.assertTrue(hm['require_buildings']);self.assertTrue(sf['require_buildings'])
 
     def test_unknown_territory_never_silently_uses_vb(self):
         with self.assertRaisesRegex(ValueError,'Unsupported territory'):get_profile('portsmouth')
@@ -71,6 +74,9 @@ class TerritoryNormalizationTests(unittest.TestCase):
                          "UPPER(FULLADDR) LIKE '500 J CLYDE MORRIS BLVD%'")
         self.assertEqual(hampton_address_where('3000 Coliseum Drive, Hampton, VA 23666'),
                          "UPPER(FullAdd) LIKE '3000 COLISEUM DR%'")
+        self.assertEqual(canonical_address('2800 Godwin Boulevard, Suffolk, VA 23434'),'2800 GODWIN BLVD')
+        self.assertEqual(suffolk_address_where('2800 Godwin Boulevard, Suffolk, VA 23434'),
+                         "ADDRNUMBER = '2800' AND UPPER(ADDRNAME) = 'GODWIN' AND UPPER(ADDRSTTYPE) = 'BLVD'")
 
     def test_chesapeake_class_and_building_context_is_descriptive(self):
         classes={'4341':'COMMERCIAL - MEDICAL OFFICE','1010':'RESIDENTIAL - SINGLE FAMILY'}
@@ -101,6 +107,20 @@ class TerritoryNormalizationTests(unittest.TestCase):
         self.assertEqual(land,'HOSPITAL | LABORATORY')
         self.assertNotIn('DORMITORY',land);self.assertNotIn('OLD OFFICE',land)
         self.assertEqual(HAMPTON_BUILDING_CONTEXT[1810],'NONRESIDENTIAL BUILDING')
+
+    def test_suffolk_assessment_context_keeps_auditable_use_and_class(self):
+        rows=[{'building_use':'Charitable','NBHD_Name':'Office/Medical/Pub','property_class':'770C'},
+              {'building_use':'Charitable','NBHD_Name':'Office/Medical/Pub','property_class':'770C'}]
+        land=suffolk_land_use(rows)
+        self.assertEqual(land,'CHARITABLE | OFFICE/MEDICAL/PUB | 770C')
+        self.assertTrue(app.prescreen({'land':land,'zone':'B-2','facility':'SENTARA OBICI HOSPITAL',
+                                       'facility_kind':'OFFICIAL PROJECT','fcodes':[],'largest':5000,
+                                       'avg':5000,'count':1,'buildings':[]},10000)[0])
+        storage=suffolk_land_use([{'building_use':'Mini-Warehouse','NBHD_Name':'Industrial'}])
+        self.assertIn('SELF STORAGE',storage)
+        self.assertFalse(app.prescreen({'land':storage,'zone':'M-1','facility':'','facility_kind':'',
+                                        'fcodes':[],'largest':20000,'avg':3000,'count':10,
+                                        'buildings':[]},10000)[0])
 
     def test_assessment_address_is_site_not_owner_address(self):
         row={'property_street_number':'800.0','property_street_direction':'E','property_street_name':'City Hall',
@@ -235,6 +255,19 @@ class TerritoryRoutingTests(unittest.TestCase):
         self.assertEqual(params['where'],"UPPER(FullAdd) LIKE '3000 COLISEUM DR%'")
         self.assertIn('PlaceName2',params['outFields']);self.assertEqual(params['outSR'],'4326')
 
+    def test_suffolk_geocode_prefers_primary_base_point(self):
+        suite={'attributes':{'OBJECTID':2,'SEARCHSTRING':'5818 HARBOUR VIEW BLVD STE A1',
+                             'PARCELID':'304626400','PRIMARYADD':'N','UNIT':'STE A1'},
+               'geometry':{'x':-76.44302,'y':36.86920}}
+        base={'attributes':{'OBJECTID':1,'SEARCHSTRING':'5818 HARBOUR VIEW BLVD',
+                            'PARCELID':'304626400','PRIMARYADD':'N','UNIT':None},
+              'geometry':{'x':-76.44292,'y':36.86974}}
+        with patch.object(app,'gj',return_value={'features':[suite,base]}) as request:
+            self.assertEqual(app.geocode('5818 Harbour View Blvd','suffolk'),(-76.44292,36.86974))
+        url,params=request.call_args.args
+        self.assertEqual(url,get_profile('suffolk')['address']);self.assertEqual(params['outSR'],'4326')
+        self.assertIn("ADDRNUMBER = '5818'",params['where']);self.assertIn('PARCELID',params['outFields'])
+
     def test_vb_geocode_keeps_original_search_contract(self):
         meta={'fields':[{'name':'FULL_ADDR','type':'esriFieldTypeString'}]}
         hits={'features':[{'geometry':{'x':-76,'y':36.8}}]}
@@ -304,6 +337,33 @@ class TerritoryRoutingTests(unittest.TestCase):
         self.assertTrue(row['assessment_matched']);self.assertEqual(row['raw_classification'],'HOSPITAL')
         self.assertEqual(parcel_query.call_args.args[1]['outSR'],'4326')
 
+    def test_suffolk_official_place_assessment_and_parcel_are_joined_by_account(self):
+        place_feature={'attributes':{'OBJECTID':1,'PARCELID':'251990000','SEARCHSTRING':'2800 GODWIN BLVD',
+                                     'AKA_TEXT':'SENTARA OBICI HOSPITAL','PRIMARYADD':'Y','UNIT':None}}
+        with patch.object(app,'pages',return_value=[place_feature]) as place_query:
+            places=app.load_suffolk_places(-76.5816,36.7731,.5)
+        self.assertEqual(places['251990000']['facility'],'SENTARA OBICI HOSPITAL')
+        self.assertEqual(place_query.call_args.args[0],get_profile('suffolk')['address'])
+
+        assessments={'251990000':[{'Account':'251990000','Owner':'LOUISE OBICI MEMORIAL HOSPITAL',
+                                    'building_use':'Charitable','NBHD_Name':'Office/Medical/Pub',
+                                    'property_class':'770C'}]}
+        feature={'attributes':{'OBJECTID':327670,'NTI_ASSACCOUNTNUM':'251990000','NTI_STREETNUMBER':'2800',
+                               'NTI_STREETDIRECTION':None,'NTI_STREETNAME':'GODWIN','NTI_STREETMD':'BLVD',
+                               'NTI_STREETSUFFIX':None,'GPIN':'0444-56-6972','ZONE_CLASS':'SPLT B-2, RR',
+                               'PARCELSQFT':2230750,'BORO_NAME':'CHUCKATUCK'},
+                 'geometry':{'rings':[square(lon=-76.5816,lat=36.7731,side=500)]}}
+        with patch.object(app,'load_suffolk_places',return_value=places),\
+             patch.object(app,'load_suffolk_assessments',return_value=assessments),\
+             patch.object(app,'pages',return_value=[feature]) as parcel_query:
+            rows=app.load_parcels(-76.5816,36.7731,.5,'suffolk')
+        row=rows[0]
+        self.assertEqual(row['gpin'],'251990000');self.assertEqual(row['facility_hint'],'SENTARA OBICI HOSPITAL')
+        self.assertEqual(row['address'],'2800 GODWIN BLVD');self.assertIn('MEDICAL',row['land'])
+        self.assertEqual(row['zone'],'SPLT B-2, RR');self.assertTrue(row['assessment_matched'])
+        self.assertEqual(row['parcel_gpin'],'0444-56-6972');self.assertEqual(row['owner_name'],'LOUISE OBICI MEMORIAL HOSPITAL')
+        self.assertEqual(parcel_query.call_args.args[1]['outSR'],'4326')
+
     def test_hampton_assessment_fetch_is_batched(self):
         feature={'attributes':{'LRSN':7001649,'UseDesc':'Hospital'}}
         with patch.object(app,'pages',return_value=[feature]) as request:
@@ -312,6 +372,16 @@ class TerritoryRoutingTests(unittest.TestCase):
         for call in request.call_args_list:
             self.assertEqual(call.args[0],get_profile('hampton')['assessment'])
             self.assertLessEqual(call.args[1]['where'].count(',')+1,150)
+
+    def test_suffolk_assessment_fetch_is_batched_and_quoted(self):
+        feature={'attributes':{'Account':'251990000','building_use':'Charitable'}}
+        with patch.object(app,'pages',return_value=[feature]) as request:
+            rows=app.load_suffolk_assessments([str(250000000+n) for n in range(301)]+['251990000'])
+        self.assertEqual(request.call_count,3);self.assertIn('251990000',rows)
+        for call in request.call_args_list:
+            self.assertEqual(call.args[0],get_profile('suffolk')['assessment'])
+            self.assertLessEqual(call.args[1]['where'].count(',')+1,150)
+            self.assertIn("'",call.args[1]['where'])
 
     def test_chesapeake_class_lookup_fails_closed_before_prescreen(self):
         with patch.object(app,'gj',return_value={'features':[]}):
@@ -381,6 +451,16 @@ class TerritoryRoutingTests(unittest.TestCase):
             _,source,_=app.load_buildings(-76.39065,37.05681,.5,'hampton')
         self.assertEqual(source,'HAMPTON CITY');self.assertIn('S_TYPE IN',query.call_args.args[5])
 
+    def test_suffolk_building_source_and_conversion_code_are_retained(self):
+        feature={'attributes':{'OBJECTID':9,'CONV_TYPE':142,'CONV_TYPE2':'142'},
+                 'geometry':{'rings':[square(lon=-76.5816,lat=36.7731,side=200)]}}
+        with patch.object(app,'pages',return_value=[feature]):
+            rows=app._query_buildings(get_profile('suffolk')['building'],-76.5816,36.7731,.5,'*',city='suffolk')
+        self.assertEqual(rows[0]['fcode'],'');self.assertEqual(rows[0]['feature_code'],142)
+        with patch.object(app,'_query_buildings',return_value=rows) as query:
+            _,source,_=app.load_buildings(-76.5816,36.7731,.5,'suffolk')
+        self.assertEqual(source,'SUFFOLK CITY');self.assertEqual(query.call_args.args[6],2000)
+
     def test_norfolk_no_footprints_stops_before_false_quiet_prescreen(self):
         with patch.object(app,'load_parcels',return_value=[]),patch.object(app,'load_osm_names',return_value=[]),patch.object(app,'load_buildings',return_value=([],'NONE',['service down'])):
             with self.assertRaisesRegex(RuntimeError,'stopped before prescreening'):app.discover(-76.28,36.85,.5,10000,'norfolk')
@@ -400,6 +480,11 @@ class TerritoryRoutingTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'Hampton building footprints.*stopped before prescreening'):
                 app.discover(-76.39065,37.05681,.5,10000,'hampton')
 
+    def test_suffolk_no_footprints_stops_before_false_quiet_prescreen(self):
+        with patch.object(app,'load_parcels',return_value=[]),patch.object(app,'load_osm_names',return_value=[]),patch.object(app,'load_buildings',return_value=([],'NONE',['service down'])):
+            with self.assertRaisesRegex(RuntimeError,'Suffolk building footprints.*stopped before prescreening'):
+                app.discover(-76.5816,36.7731,.5,10000,'suffolk')
+
     def test_discovery_records_candidate_cap_and_unmatched(self):
         parcels=[{'gpin':str(n),'address':f'{n} Test Rd','land':'UNKNOWN','zone':'','lon':-76.28,'lat':36.85,'rings':[square()], 'psq':10000,'assessment_matched':False} for n in range(251)]
         report={}
@@ -416,17 +501,20 @@ class ImageryAndAuditTests(unittest.TestCase):
         ch,cp=app.image_request_params(-76.28,36.85,1000,territory='chesapeake')
         nn,nnp=app.image_request_params(-76.4830,37.0643,1000,territory='newport_news')
         hm,hmp=app.image_request_params(-76.39065,37.05681,1000,territory='hampton')
+        sf,sfp=app.image_request_params(-76.5816,36.7731,1000,territory='suffolk')
         self.assertNotEqual(vb,nf)
         self.assertEqual(len({vb,nf,ch,hm}),4)
         self.assertEqual(nn,ch)
-        for params in (np,cp,nnp,hmp):
+        self.assertEqual(sf,ch)
+        for params in (np,cp,nnp,hmp,sfp):
             for key in ('bbox','bboxSR','imageSR','size','format'):
-                if params in (nnp,hmp) and key=='bbox':continue
+                if params in (nnp,hmp,sfp) and key=='bbox':continue
                 self.assertEqual(vp[key],params[key])
         bounds=[float(x) for x in np['bbox'].split(',')]
         self.assertAlmostEqual(bounds[2]-bounds[0],304.8,places=5)
         self.assertEqual(np['layers'],'show:0');self.assertEqual(cp['layers'],'show:0')
         self.assertEqual(hmp['layers'],'show:13')
+        self.assertEqual(sfp['layers'],'show:0')
 
     def test_transient_503_is_retried_with_bounded_backoff(self):
         error=app.urllib.error.HTTPError('https://example.test',503,'temporarily unavailable',None,None)
@@ -446,12 +534,13 @@ class ImageryAndAuditTests(unittest.TestCase):
         self.assertEqual(app.csv_source_fields({'territory':'chesapeake'})['city'],'Chesapeake')
         self.assertEqual(app.csv_source_fields({'territory':'newport_news'})['city'],'Newport News')
         self.assertEqual(app.csv_source_fields({'territory':'hampton'})['city'],'Hampton')
+        self.assertEqual(app.csv_source_fields({'territory':'suffolk'})['city'],'Suffolk')
         self.assertEqual(app.csv_source_fields({})['city'],'Virginia Beach')
 
     def test_scan_metadata_identifies_frozen_baseline_and_sources(self):
         d=app.make_scan_metadata([{'territory':'hampton'}],{'truncated':True})
         self.assertEqual(d['detector_baseline_version'],'0.11.7');self.assertEqual(d['model_pipeline_version'],'0.0.12')
-        self.assertEqual(d['territory_logic_version'],'0.11.13')
+        self.assertEqual(d['territory_logic_version'],'0.11.14')
         self.assertEqual(d['data_sources'][0]['city'],'Hampton');self.assertTrue(d['discovery']['truncated'])
 
     def test_all_campus_views_use_the_row_territory_and_manifest(self):
@@ -529,6 +618,7 @@ class AppStateTests(unittest.TestCase):
     def test_default_and_city_change_do_not_mix_existing_rows(self):
         self.assertEqual(self.ui.active_territory,'norfolk');self.assertEqual(self.ui.rad.get(),'0.5')
         self.assertIn('Hampton',self.ui.cityb.options['values'])
+        self.assertIn('Suffolk',self.ui.cityb.options['values'])
         self.assertNotIn('Newport News',self.ui.cityb.options['values'])
         self.assertNotIn('Chesapeake',self.ui.cityb.options['values'])
         self.ui.rows=[{'address':'Old Norfolk property'}];self.ui.last_scan_root='old';self.ui.review_csv_path='old'

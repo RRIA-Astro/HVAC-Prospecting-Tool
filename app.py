@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from territories import (PROFILES,ASSESSMENT_FIELDS,NORFOLK_BUILDING_CONTEXT,CHESAPEAKE_BUILDING_CONTEXT,NEWPORT_NEWS_BUILDING_CONTEXT,HAMPTON_BUILDING_CONTEXT,
                          get_profile,numeric_id,canonical_address,norfolk_address_where,chesapeake_address_where,
                          newport_news_address_where,hampton_address_where,chesapeake_land_use,newport_news_land_use,hampton_land_use,
-                         assessment_address,norfolk_land_use,assessment_choice,source_metadata)
+                         suffolk_address_where,suffolk_land_use,assessment_address,norfolk_land_use,assessment_choice,source_metadata)
 
 # Backward-compatible Virginia Beach endpoint names; profiles own the routes.
 ADDR=PROFILES['virginia_beach']['address']
@@ -39,12 +39,15 @@ def gj(u,p):
 
 def geocode(t,territory="virginia_beach"):
     profile=get_profile(territory);url=profile["address"]
-    if territory in ("norfolk","chesapeake","newport_news","hampton"):
+    if territory in ("norfolk","chesapeake","newport_news","hampton","suffolk"):
         if territory=="norfolk":field="FULL_ADD";where=norfolk_address_where(t)
         elif territory=="chesapeake":field="ADDRESS";where=chesapeake_address_where(t)
         elif territory=="newport_news":field="FULLADDR";where=newport_news_address_where(t)
-        else:field="FullAdd";where=hampton_address_where(t)
-        out_fields=field if territory!="hampton" else field+",OBJECTID,GISLRSN,PlaceName,PlaceName2,CLASS"
+        elif territory=="hampton":field="FullAdd";where=hampton_address_where(t)
+        else:field="SEARCHSTRING";where=suffolk_address_where(t)
+        if territory=="hampton":out_fields=field+",OBJECTID,GISLRSN,PlaceName,PlaceName2,CLASS"
+        elif territory=="suffolk":out_fields="OBJECTID,ADDRNUMBER,ADDRDIRECTION,ADDRNAME,ADDRSTTYPE,ADDRSUFFIX,UNIT,SEARCHSTRING,PARCELID,AKA_TEXT,PRIMARYADD"
+        else:out_fields=field
         d=gj(url,{"f":"json","where":where,"outFields":out_fields,
                   "returnGeometry":"true","outSR":"4326","resultRecordCount":100})
         fs=d.get("features",[])
@@ -75,6 +78,16 @@ def geocode(t,territory="virginia_beach"):
                 first=exact[0].get("geometry",{})
                 if first and all(miles(float(first["x"]),float(first["y"]),float(f["geometry"]["x"]),float(f["geometry"]["y"]))<=.15 for f in exact if f.get("geometry")):
                     exact=exact[:1]
+        if territory=="suffolk" and exact:
+            # Prefer the city's primary/base point. Large medical sites can have
+            # many suite records sharing the same street number and parcel.
+            primary=[f for f in exact if str(f.get("attributes",{}).get("PRIMARYADD") or "").upper()=="Y"]
+            if primary:exact=primary
+            unitless=[f for f in exact if not str(f.get("attributes",{}).get("UNIT") or "").strip()]
+            if unitless:exact=unitless
+            exact.sort(key=lambda f:int(f.get("attributes",{}).get("OBJECTID") or 0))
+            parcel_ids={str(f.get("attributes",{}).get("PARCELID") or "").strip() for f in exact}-{''}
+            if len(exact)>1 and len(parcel_ids)==1:exact=exact[:1]
         fs=exact or fs
         points={(float(f["geometry"]["x"]),float(f["geometry"]["y"])) for f in fs if f.get("geometry")}
         city=profile["name"]
@@ -219,6 +232,43 @@ def load_hampton_assessments(lrsns):
                 if ident:out.setdefault(ident,[]).append(row)
     return out
 
+def load_suffolk_places(x,y,mi):
+    """Load official nonresidential place names once, keyed by assessor account."""
+    profile=get_profile("suffolk");a,b,c,d=bbox(x,y,mi)
+    p={"f":"json","where":"RESIDENTIAL = 'N' AND (PRIMARYADD = 'Y' OR UNIT IS NULL OR UNIT = '')",
+       "geometry":f"{a},{b},{c},{d}","geometryType":"esriGeometryEnvelope","inSR":"4326",
+       "spatialRel":"esriSpatialRelIntersects",
+       "outFields":"OBJECTID,PARCELID,SEARCHSTRING,AKA_TEXT,PRIMARYADD,UNIT",
+       "returnGeometry":"false","orderByFields":"OBJECTID ASC"}
+    grouped={}
+    for feature in pages(profile["address"],p,chunk=profile["query_chunk"]):
+        attributes=feature.get("attributes",{});ident=str(attributes.get("PARCELID") or "").strip()
+        if not ident:continue
+        record={"facility":" ".join(str(attributes.get("AKA_TEXT") or "").split()),
+                "address":" ".join(str(attributes.get("SEARCHSTRING") or "").split()),
+                "primary":str(attributes.get("PRIMARYADD") or "").upper()=="Y"}
+        current=grouped.get(ident)
+        if current is None or (record["facility"] and not current["facility"]) or (record["primary"] and not current["primary"]):
+            grouped[ident]=record
+    return grouped
+
+def load_suffolk_assessments(accounts):
+    """Batch Suffolk land-book table records; never query one parcel at a time."""
+    ids=sorted({str(value or "").strip() for value in accounts}-{''});url=get_profile("suffolk")["assessment"]
+    batches=[ids[i:i+150] for i in range(0,len(ids),150)]
+    fields="OBJECTID,Account,Owner,Assr_Area,Assr_Area_Unit,property_class,building_use,NBHD_Name"
+    def batch(values):
+        quoted=",".join("'"+value.replace("'","''")+"'" for value in values)
+        return pages(url,{"f":"json","where":"Account IN ("+quoted+")","outFields":fields,
+                          "returnGeometry":"false","orderByFields":"OBJECTID ASC"},chunk=2000)
+    out={}
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        for features in pool.map(batch,batches):
+            for feature in features:
+                row=feature.get("attributes",{});ident=str(row.get("Account") or "").strip()
+                if ident:out.setdefault(ident,[]).append(row)
+    return out
+
 def load_parcels(x,y,mi,territory="virginia_beach"):
     profile=get_profile(territory)
     a,b,c,d=bbox(x,y,mi)
@@ -229,7 +279,8 @@ def load_parcels(x,y,mi,territory="virginia_beach"):
     out=[];chesapeake_classes=load_chesapeake_classes() if territory=="chesapeake" else {}
     newport_places=load_newport_news_places(x,y,mi) if territory=="newport_news" else {}
     hampton_places=load_hampton_places(x,y,mi) if territory=="hampton" else {}
-    if territory in ("norfolk","chesapeake","newport_news","hampton"):p["orderByFields"]="OBJECTID ASC"
+    suffolk_places=load_suffolk_places(x,y,mi) if territory=="suffolk" else {}
+    if territory in ("norfolk","chesapeake","newport_news","hampton","suffolk"):p["orderByFields"]="OBJECTID ASC"
     for f in pages(profile["parcel"],p,chunk=profile["query_chunk"]):
         at=f.get("attributes",{});rs=f.get("geometry",{}).get("rings",[]);cx,cy=centroid(rs)
         try:lon=float(at.get("LONGITUDE") or cx);lat=float(at.get("LATITUDE") or cy)
@@ -290,11 +341,28 @@ def load_parcels(x,y,mi,territory="virginia_beach"):
                         "parcel_gpin":" ".join(str(at.get("GPIN") or "").split()),
                         "assessment_source":profile["assessment_label"],"assessment_matched":False})
             continue
+        if territory=="suffolk":
+            ident=str(at.get("NTI_ASSACCOUNTNUM") or "").strip();oid=str(at.get("OBJECTID") or "")
+            place=suffolk_places.get(ident,{})
+            address=" ".join(str(x or "").strip() for x in (
+                at.get("NTI_STREETNUMBER"),at.get("NTI_STREETDIRECTION"),at.get("NTI_STREETNAME"),
+                at.get("NTI_STREETMD"),at.get("NTI_STREETSUFFIX")) if str(x or "").strip())
+            out.append({"gpin":ident or "SUFFOLK-OID:"+oid,
+                        "address":address or place.get("address") or ("Suffolk parcel "+(ident or oid)),
+                        "land":"UNKNOWN","zone":" ".join(str(at.get("ZONE_CLASS") or "").split()),
+                        "lon":lon,"lat":lat,"rings":rs,
+                        "psq":float(at.get("PARCELSQFT") or 0) or area(rs),
+                        "territory":territory,"city":profile["name"],
+                        "facility_hint":place.get("facility","") or "",
+                        "parcel_gpin":" ".join(str(at.get("GPIN") or "").split()),
+                        "borough":" ".join(str(at.get("BORO_NAME") or "").split()),
+                        "assessment_source":profile["assessment_label"],"assessment_matched":False})
+            continue
         out.append({"gpin":str(at.get("PAR_GPIN") or ""),"address":at.get("FULL_ADDR") or at.get("PROP_ADDRESS") or "",
                     "land":at.get("LAND_USE") or "","zone":at.get("ZONING") or "",
                     "lon":lon,"lat":lat,"rings":rs,"psq":area(rs),"territory":territory,"city":profile["name"],
                     "assessment_source":profile["assessment_label"],"assessment_matched":True})
-    if territory in ("norfolk","chesapeake","newport_news","hampton"):
+    if territory in ("norfolk","chesapeake","newport_news","hampton","suffolk"):
         # Preserve all polygon parts of a campus sharing one assessment GPIN.
         grouped={}
         for parcel in out:
@@ -314,6 +382,18 @@ def load_parcels(x,y,mi,territory="virginia_beach"):
                     " ".join(str(r.get("UseDesc") or "").split()) for r in records if str(r.get("UseDesc") or "").strip()))
                 parcel["raw_classification"]=" | ".join(dict.fromkeys(
                     " ".join(str(r.get("UseCode") or r.get("ImprType") or "").split()) for r in records if str(r.get("UseCode") or r.get("ImprType") or "").strip()))
+        if territory=="suffolk":
+            assessments=load_suffolk_assessments([p["gpin"] for p in out])
+            for parcel in out:
+                records=assessments.get(str(parcel.get("gpin") or "").strip(),[])
+                parcel["land"]=suffolk_land_use(records)
+                parcel["assessment_matched"]=bool(records)
+                parcel["raw_property_use"]=" | ".join(dict.fromkeys(
+                    " ".join(str(r.get(field) or "").split()) for r in records for field in ("building_use","NBHD_Name") if str(r.get(field) or "").strip()))
+                parcel["raw_classification"]=" | ".join(dict.fromkeys(
+                    " ".join(str(r.get("property_class") or "").split()) for r in records if str(r.get("property_class") or "").strip()))
+                parcel["owner_name"]=" | ".join(dict.fromkeys(
+                    " ".join(str(r.get("Owner") or "").split()) for r in records if str(r.get("Owner") or "").strip()))
     return out
 
 def _query_buildings(url,x,y,mi,outfields,where="1=1",chunk=1800,city=""):
@@ -336,6 +416,8 @@ def _query_buildings(url,x,y,mi,outfields,where="1=1",chunk=1800,city=""):
                 feature_code=str(at.get("FEATURECODE") or "").strip();context=NEWPORT_NEWS_BUILDING_CONTEXT.get(feature_code,"")
             elif city=="hampton":
                 feature_code=at.get("S_TYPE");context=HAMPTON_BUILDING_CONTEXT.get(feature_code,"")
+            elif city=="suffolk":
+                feature_code=at.get("CONV_TYPE");context=""
             else:
                 feature_code=None;context=at.get("fcode") or at.get("FCODE") or ""
             out.append({"lon":cx,"lat":cy,"sq":round(area(rs)),"rings":rs,
@@ -348,7 +430,7 @@ def load_buildings(x,y,mi,territory="virginia_beach"):
     errors=[];profile=get_profile(territory);label=profile["building_source"]
     try:
         b=_query_buildings(profile["building"],x,y,mi,"*",profile["building_where"],profile["query_chunk"],
-                           territory if territory in ("norfolk","chesapeake","newport_news","hampton") else "")
+                           territory if territory in ("norfolk","chesapeake","newport_news","hampton","suffolk") else "")
         if b:return b,label,errors
         errors.append(label+" returned 0 footprints")
     except Exception as e:
@@ -748,9 +830,9 @@ from datetime import datetime
 from PIL import Image,ImageTk,ImageDraw
 import numpy as np
 
-APP_VERSION='0.11.13'
+APP_VERSION='0.11.14'
 DETECTOR_BASELINE_VERSION='0.11.7'
-TERRITORY_LOGIC_VERSION='0.11.13'
+TERRITORY_LOGIC_VERSION='0.11.14'
 CANDIDATE_THRESHOLD=0.07
 TOWER_CHILLER_THRESHOLD=0.35
 LARGE_PACKAGED_THRESHOLD=0.45
@@ -1367,7 +1449,7 @@ def norfolk_small_warehouse_clutter_reject(z,d,thermal_detections):
 
 def high_value_medical_manual_review(z):
     """Keep large medical campuses visible even when fanless heat rejection evades CV."""
-    if (z.get('territory') or 'virginia_beach') not in ('norfolk','chesapeake','newport_news','hampton'):return False
+    if (z.get('territory') or 'virginia_beach') not in ('norfolk','chesapeake','newport_news','hampton','suffolk'):return False
     ctx=property_context(z);largest=float(z.get('largest') or 0)
     medical=any(k in ctx for k in ('HOSPITAL','MEDICAL CENTER','HEALTH CARE'))
     residential=any(k in ctx for k in ('APART','CONDO','TOWN HOUSE','TOWNHOUSE','TOWNHOME'))
@@ -1635,7 +1717,7 @@ class App:
     def __init__(self,r):
         self.r=r;self.rows=[];self.cv=None;self.scan_running=False;self.discovery_running=False;self.last_scan_root=None;self.review_csv_path=None
         self.active_territory='norfolk';self.discovery_report={}
-        r.title(f'HVAC Territory Discovery v{APP_VERSION} — Hampton + Norfolk + Virginia Beach');r.geometry('1820x930')
+        r.title(f'HVAC Territory Discovery v{APP_VERSION} — Hampton + Norfolk + Suffolk + Virginia Beach');r.geometry('1820x930')
         t=ttk.Frame(r,padding=10);t.pack(fill='x')
         ttk.Label(t,text='City:').grid(row=0,column=0);self.city=tk.StringVar(value='Norfolk')
         self.cityb=ttk.Combobox(t,textvariable=self.city,values=[p['name'] for p in PROFILES.values() if p.get('enabled',True)],state='readonly',width=17);self.cityb.grid(row=0,column=1,padx=5);self.cityb.bind('<<ComboboxSelected>>',self.change_city)
@@ -1645,7 +1727,7 @@ class App:
         self.discb=ttk.Button(t,text='1. Discover + Prescreen',command=self.start);self.discb.grid(row=0,column=8,padx=8)
         self.scanb=ttk.Button(t,text='2. Analyze Prescreened',command=self.analyze_prescreened);self.scanb.grid(row=0,column=9,padx=5)
         self.openb=ttk.Button(t,text='Open Existing Scan',command=self.load_existing_scan);self.openb.grid(row=0,column=10,padx=8)
-        self.st=tk.StringVar(value=f'v{APP_VERSION} adds Hampton official GIS and 2026 aerials; Chesapeake and Newport News are paused for imagery quality — frozen v0.0.12 models.');ttk.Label(r,textvariable=self.st).pack(fill='x',padx=10)
+        self.st=tk.StringVar(value=f'v{APP_VERSION} adds Suffolk official GIS with preflighted VGIN imagery; Chesapeake and Newport News remain paused — frozen v0.0.12 models.');ttk.Label(r,textvariable=self.st).pack(fill='x',padx=10)
         cols=('rank','facility','address','cv','opp','evidence','maxp','review','note','largest','bldgs','mi','land','tier','pre','prewhy','gis','source')
         heads={'rank':'#','facility':'FACILITY','address':'ADDRESS','cv':'TRIAGE','opp':'OPP','evidence':'MECHANICAL EVIDENCE','maxp':'MAX P','review':'USER','note':'NOTE','largest':'LARGEST','bldgs':'BLDGS','mi':'MI','land':'LAND USE','tier':'GIS TIER','pre':'PRE','prewhy':'PRESCREEN REASON','gis':'GIS','source':'FOOTPRINT'}
         widths=(42,205,170,72,52,245,55,72,150,82,48,48,145,65,42,170,48,85)
@@ -1767,7 +1849,7 @@ class App:
                 f'HVAC Territory Discovery v{APP_VERSION}\nCities: {city_names}\nCore detector baseline: v{DETECTOR_BASELINE_VERSION}\nTerritory logic: v{TERRITORY_LOGIC_VERSION}\n'
                 f'Frozen detector pipeline v0.0.12\nPrimary thresholds 0.07 / 0.35 / 0.45\nParcel buffer: {PARCEL_BUFFER_FT:.0f} ft\n\n'
                 f'Properties analyzed: {len(rows)}\nSTRONG: {strong}\nREVIEW: {review}\nSurfaced total: {surf}\nQUIET: {quiet}\nNeighbor-assigned duplicate evidence: {reassigned}\n\n'
-                'v0.11.13 retains the model weights and thresholds, preserves prior detector behavior, adds Hampton official GIS/2026 municipal imagery routing, and pauses Chesapeake and Newport News in the city selector pending better imagery.\n'
+                'v0.11.14 retains the model weights and thresholds, preserves prior detector behavior, adds Suffolk official GIS with preflighted VGIN imagery, and keeps Chesapeake and Newport News paused pending better imagery.\n'
                 'See SCAN_METADATA.json for discovery coverage/candidate limits and data sources, and DISCOVERY_AUDIT.json for prescreened and filtered displayed candidates.\n'
                 'Mechanical evidence is geographically de-duplicated across views and properties. Ordinary outside-parcel and context-rejected detections do not rank; Norfolk equipment on an already-joined building footprint is REVIEW-only.\n'
                 'QUIET does not prove that valuable equipment is absent. Imagery age, shadows, roof displacement, GIS completeness, and hidden equipment can affect detection.\n',encoding='utf-8')
