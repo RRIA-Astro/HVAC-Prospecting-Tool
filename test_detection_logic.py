@@ -52,7 +52,7 @@ class _Candidate:
 class FrozenDetectionLogicTests(unittest.TestCase):
     def test_frozen_primary_operating_points(self):
         self.assertEqual(app.DETECTOR_BASELINE_VERSION,"0.11.7")
-        self.assertEqual(app.TERRITORY_LOGIC_VERSION,"0.11.14")
+        self.assertEqual(app.TERRITORY_LOGIC_VERSION,"0.11.15")
         self.assertEqual((app.CANDIDATE_THRESHOLD,app.TOWER_CHILLER_THRESHOLD,app.LARGE_PACKAGED_THRESHOLD),(.07,.35,.45))
 
     def test_5925_target_is_well_inside_a_zoom_crop(self):
@@ -211,6 +211,7 @@ class FrozenDetectionLogicTests(unittest.TestCase):
         self.assertEqual(app.triage_status(dict(site,territory="chesapeake"),cv),"REVIEW")
         self.assertEqual(app.triage_status(dict(site,territory="hampton"),cv),"REVIEW")
         self.assertEqual(app.triage_status(dict(site,territory="suffolk",facility="Sentara Obici Hospital"),cv),"REVIEW")
+        self.assertEqual(app.triage_status(dict(site,territory="portsmouth",facility="Maryview Hospital"),cv),"REVIEW")
         self.assertEqual(app.triage_status(dict(site,territory="virginia_beach"),cv),"QUIET")
         self.assertEqual(app.triage_status(dict(site,largest=99999),cv),"QUIET")
 

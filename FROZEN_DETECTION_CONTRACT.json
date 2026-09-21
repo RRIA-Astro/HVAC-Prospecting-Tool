@@ -1,6 +1,6 @@
 {
   "detector_baseline_version": "0.11.7",
-  "territory_logic_version": "0.11.14",
+  "territory_logic_version": "0.11.15",
   "constants": {
     "CANDIDATE_THRESHOLD": 0.07,
     "TOWER_CHILLER_THRESHOLD": 0.35,
@@ -87,7 +87,7 @@
     "triage_status": "eb4308615bd82d365decd776dbe232b65276942d1c9d96bf0088ae930b0d3c34",
     "hit_text": "2f76af6a9922df5039f678481349c5ae414cf2153dd0f90e61b861e412aa705c",
     "norfolk_small_warehouse_clutter_reject": "ab3c0cf46cfc16675f65cfb99795d9b9c77419f880cd098505fb378899ef6f37",
-    "high_value_medical_manual_review": "600eceba696694468a10c0010c991c4942db70406c67a0cce6febcca313023f4",
+    "high_value_medical_manual_review": "041445f76828167442a2753e11b27aac634db30861944e7b10998a9e53caaf25",
     "urlopen_with_retry": "154895ea80875e7f1597c2b54cbe1288efa0a66dfa3a59a4bc0b7e97654ef6c7",
     "opportunity_score": "d65d9161fa37173d7dbc7ec448cfb6596b5354866fd1614fe8a5ea44142de658",
     "cross_property_same_machine": "853ab8e535c1d4774252fc5d8c6dd4cbb634f8a00169f75874dd04ecbb7cb656",

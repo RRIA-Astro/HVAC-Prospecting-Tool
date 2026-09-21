@@ -5,7 +5,8 @@ from concurrent.futures import ThreadPoolExecutor
 from territories import (PROFILES,ASSESSMENT_FIELDS,NORFOLK_BUILDING_CONTEXT,CHESAPEAKE_BUILDING_CONTEXT,NEWPORT_NEWS_BUILDING_CONTEXT,HAMPTON_BUILDING_CONTEXT,
                          get_profile,numeric_id,canonical_address,norfolk_address_where,chesapeake_address_where,
                          newport_news_address_where,hampton_address_where,chesapeake_land_use,newport_news_land_use,hampton_land_use,
-                         suffolk_address_where,suffolk_land_use,assessment_address,norfolk_land_use,assessment_choice,source_metadata)
+                         suffolk_address_where,suffolk_land_use,portsmouth_address_where,portsmouth_land_use,
+                         assessment_address,norfolk_land_use,assessment_choice,source_metadata)
 
 # Backward-compatible Virginia Beach endpoint names; profiles own the routes.
 ADDR=PROFILES['virginia_beach']['address']
@@ -39,14 +40,16 @@ def gj(u,p):
 
 def geocode(t,territory="virginia_beach"):
     profile=get_profile(territory);url=profile["address"]
-    if territory in ("norfolk","chesapeake","newport_news","hampton","suffolk"):
+    if territory in ("norfolk","chesapeake","newport_news","hampton","suffolk","portsmouth"):
         if territory=="norfolk":field="FULL_ADD";where=norfolk_address_where(t)
         elif territory=="chesapeake":field="ADDRESS";where=chesapeake_address_where(t)
         elif territory=="newport_news":field="FULLADDR";where=newport_news_address_where(t)
         elif territory=="hampton":field="FullAdd";where=hampton_address_where(t)
-        else:field="SEARCHSTRING";where=suffolk_address_where(t)
+        elif territory=="suffolk":field="SEARCHSTRING";where=suffolk_address_where(t)
+        else:field="Address_Ne";where=portsmouth_address_where(t)
         if territory=="hampton":out_fields=field+",OBJECTID,GISLRSN,PlaceName,PlaceName2,CLASS"
         elif territory=="suffolk":out_fields="OBJECTID,ADDRNUMBER,ADDRDIRECTION,ADDRNAME,ADDRSTTYPE,ADDRSUFFIX,UNIT,SEARCHSTRING,PARCELID,AKA_TEXT,PRIMARYADD"
+        elif territory=="portsmouth":out_fields="OBJECTID,CPN,ST_NUM,ST_NAME,ST_TYPE,ST_DIR,SUITE,Address_Ne,duplicate"
         else:out_fields=field
         d=gj(url,{"f":"json","where":where,"outFields":out_fields,
                   "returnGeometry":"true","outSR":"4326","resultRecordCount":100})
@@ -87,6 +90,14 @@ def geocode(t,territory="virginia_beach"):
             if unitless:exact=unitless
             exact.sort(key=lambda f:int(f.get("attributes",{}).get("OBJECTID") or 0))
             parcel_ids={str(f.get("attributes",{}).get("PARCELID") or "").strip() for f in exact}-{''}
+            if len(exact)>1 and len(parcel_ids)==1:exact=exact[:1]
+        if territory=="portsmouth" and exact:
+            primary=[f for f in exact if not int(f.get("attributes",{}).get("duplicate") or 0)]
+            if primary:exact=primary
+            unitless=[f for f in exact if not str(f.get("attributes",{}).get("SUITE") or "").strip()]
+            if unitless:exact=unitless
+            exact.sort(key=lambda f:int(f.get("attributes",{}).get("OBJECTID") or 0))
+            parcel_ids={str(f.get("attributes",{}).get("CPN") or "").strip() for f in exact}-{''}
             if len(exact)>1 and len(parcel_ids)==1:exact=exact[:1]
         fs=exact or fs
         points={(float(f["geometry"]["x"]),float(f["geometry"]["y"])) for f in fs if f.get("geometry")}
@@ -280,7 +291,8 @@ def load_parcels(x,y,mi,territory="virginia_beach"):
     newport_places=load_newport_news_places(x,y,mi) if territory=="newport_news" else {}
     hampton_places=load_hampton_places(x,y,mi) if territory=="hampton" else {}
     suffolk_places=load_suffolk_places(x,y,mi) if territory=="suffolk" else {}
-    if territory in ("norfolk","chesapeake","newport_news","hampton","suffolk"):p["orderByFields"]="OBJECTID ASC"
+    if territory in ("norfolk","chesapeake","newport_news","hampton","suffolk","portsmouth"):
+        p["orderByFields"]=profile.get("parcel_oid","OBJECTID")+" ASC"
     for f in pages(profile["parcel"],p,chunk=profile["query_chunk"]):
         at=f.get("attributes",{});rs=f.get("geometry",{}).get("rings",[]);cx,cy=centroid(rs)
         try:lon=float(at.get("LONGITUDE") or cx);lat=float(at.get("LATITUDE") or cy)
@@ -358,11 +370,32 @@ def load_parcels(x,y,mi,territory="virginia_beach"):
                         "borough":" ".join(str(at.get("BORO_NAME") or "").split()),
                         "assessment_source":profile["assessment_label"],"assessment_matched":False})
             continue
+        if territory=="portsmouth":
+            ident=str(at.get("CPN") or "").strip();oid=str(at.get("FID") or "")
+            address=" ".join(str(at.get("SITE_ADDRE") or "").split())
+            raw_use=" | ".join(dict.fromkeys(x for x in (
+                " ".join(str(at.get("BLDG_TYPE") or "").split()),
+                " ".join(str(at.get("TYPE_PROP") or "").split())) if x))
+            raw_class=" | ".join(str(at.get(field)).strip() for field in
+                                 ("PROP_TYPE","TYPE_BLDG","CLAS","SUBCLASS_T")
+                                 if at.get(field) is not None and str(at.get(field)).strip())
+            owner=" ".join(str(at.get("OWNER") or "").split())
+            out.append({"gpin":ident or "PORTSMOUTH-OID:"+oid,
+                        "address":address or ("Portsmouth parcel "+(ident or oid)),
+                        "land":portsmouth_land_use(at),"zone":" ".join(str(at.get("ZONING") or "").split()),
+                        "lon":lon,"lat":lat,"rings":rs,"psq":area(rs),
+                        "territory":territory,"city":profile["name"],
+                        "facility_hint":owner,"parcel_mpn":" ".join(str(at.get("MPN") or "").split()),
+                        "raw_property_use":raw_use,"raw_classification":raw_class,
+                        "assessment_source":profile["assessment_label"],"assessment_matched":bool(raw_use or owner),
+                        "owner_name":owner,"assessed_building_ft2":at.get("TOT_SQ_FT") or "",
+                        "neighborhood":" ".join(str(at.get("NEIGHBORHD") or "").split())})
+            continue
         out.append({"gpin":str(at.get("PAR_GPIN") or ""),"address":at.get("FULL_ADDR") or at.get("PROP_ADDRESS") or "",
                     "land":at.get("LAND_USE") or "","zone":at.get("ZONING") or "",
                     "lon":lon,"lat":lat,"rings":rs,"psq":area(rs),"territory":territory,"city":profile["name"],
                     "assessment_source":profile["assessment_label"],"assessment_matched":True})
-    if territory in ("norfolk","chesapeake","newport_news","hampton","suffolk"):
+    if territory in ("norfolk","chesapeake","newport_news","hampton","suffolk","portsmouth"):
         # Preserve all polygon parts of a campus sharing one assessment GPIN.
         grouped={}
         for parcel in out:
@@ -418,6 +451,8 @@ def _query_buildings(url,x,y,mi,outfields,where="1=1",chunk=1800,city=""):
                 feature_code=at.get("S_TYPE");context=HAMPTON_BUILDING_CONTEXT.get(feature_code,"")
             elif city=="suffolk":
                 feature_code=at.get("CONV_TYPE");context=""
+            elif city=="portsmouth":
+                feature_code=None;context=""
             else:
                 feature_code=None;context=at.get("fcode") or at.get("FCODE") or ""
             out.append({"lon":cx,"lat":cy,"sq":round(area(rs)),"rings":rs,
@@ -430,7 +465,7 @@ def load_buildings(x,y,mi,territory="virginia_beach"):
     errors=[];profile=get_profile(territory);label=profile["building_source"]
     try:
         b=_query_buildings(profile["building"],x,y,mi,"*",profile["building_where"],profile["query_chunk"],
-                           territory if territory in ("norfolk","chesapeake","newport_news","hampton","suffolk") else "")
+                           territory if territory in ("norfolk","chesapeake","newport_news","hampton","suffolk","portsmouth") else "")
         if b:return b,label,errors
         errors.append(label+" returned 0 footprints")
     except Exception as e:
@@ -677,13 +712,73 @@ def download_image(url,params,out,pixels):
     except Exception as exc:raise RuntimeError("Imagery service did not return a readable image.") from exc
     Path(out).write_bytes(data)
 
+def _tile_cache_path(profile,zoom,row,column):
+    service=profile["imagery"].rstrip("/").split("/")[-2]
+    return Path(tempfile.gettempdir())/"hvac_territory_tiles"/service/str(zoom)/str(row)/(str(column)+".png")
+
+def _download_tile(profile,zoom,row,column):
+    """Download one immutable municipal tile with a bounded local cache."""
+    cache=_tile_cache_path(profile,zoom,row,column)
+    if cache.is_file():
+        data=cache.read_bytes()
+    else:
+        url=profile["imagery"].rstrip("/")+f"/tile/{zoom}/{row}/{column}"
+        req=urllib.request.Request(url,headers={"User-Agent":f"HVAC-Territory/{APP_VERSION}"})
+        with urlopen_with_retry(req,timeout=60) as response:data=response.read()
+        cache.parent.mkdir(parents=True,exist_ok=True);cache.write_bytes(data)
+    import io
+    try:
+        image=Image.open(io.BytesIO(data)).convert("RGB");image.load()
+    except Exception as exc:
+        if cache.exists():cache.unlink()
+        raise RuntimeError(f"Portsmouth imagery tile {zoom}/{row}/{column} was unreadable.") from exc
+    if image.size!=(256,256):
+        if cache.exists():cache.unlink()
+        raise RuntimeError(f"Portsmouth imagery tile {zoom}/{row}/{column} had unexpected size {image.size}.")
+    return column,row,image
+
+def download_tiled_image(x,y,side_ft,out,pixels,territory):
+    """Mosaic an exact centered frame from a public Web-Mercator tile service."""
+    profile=get_profile(territory)
+    if profile.get("imagery_kind")!="tile_server":
+        raise ValueError(f"{profile['name']} is not configured for tiled imagery.")
+    projected_side=max(1.0,float(side_ft)*.3048)
+    native_pixels=max(256,min(int(pixels),int(profile.get("tile_native_pixels",1200))))
+    target_resolution=projected_side/native_pixels
+    zoom=round(math.log2(156543.03392804097/target_resolution))
+    zoom=max(int(profile.get("tile_min_zoom",0)),min(int(profile.get("tile_max_zoom",23)),zoom))
+    scale=256*(2**zoom)
+    center_x=(float(x)+180.0)/360.0*scale
+    center_y=(1.0-math.asinh(math.tan(math.radians(float(y))))/math.pi)/2.0*scale
+    native_side=projected_side/(156543.03392804097/(2**zoom))
+    left=center_x-native_side/2;top=center_y-native_side/2
+    right=center_x+native_side/2;bottom=center_y+native_side/2
+    column0=math.floor(left/256);row0=math.floor(top/256)
+    column1=math.floor((right-1e-9)/256);row1=math.floor((bottom-1e-9)/256)
+    tiles=[(profile,zoom,row,column) for row in range(row0,row1+1) for column in range(column0,column1+1)]
+    if not tiles or len(tiles)>100:
+        raise RuntimeError(f"Portsmouth imagery request required {len(tiles)} tiles; refusing an unsafe mosaic.")
+    mosaic=Image.new("RGB",((column1-column0+1)*256,(row1-row0+1)*256))
+    with ThreadPoolExecutor(max_workers=min(10,len(tiles))) as pool:
+        for column,row,image in pool.map(lambda args:_download_tile(*args),tiles):
+            mosaic.paste(image,((column-column0)*256,(row-row0)*256))
+    box=(round(left-column0*256),round(top-row0*256),round(right-column0*256),round(bottom-row0*256))
+    frame=mosaic.crop(box)
+    if frame.size!=(pixels,pixels):frame=frame.resize((pixels,pixels),Image.Resampling.LANCZOS)
+    if all(lo==hi for lo,hi in frame.getextrema()):
+        raise RuntimeError("Portsmouth imagery mosaic is blank. Check coverage before scanning.")
+    Path(out).parent.mkdir(parents=True,exist_ok=True)
+    frame.save(out,format="JPEG",quality=94,subsampling=0)
+
 def aerial(x,y,sf,out,territory="virginia_beach"):
     side=max(650,min(1800,math.sqrt(max(sf or 30000,1))*3.2))
-    url,params=image_request_params(x,y,side,territory=territory);download_image(url,params,out,1800)
+    aerial_side(x,y,side,out,1800,territory)
 
 
 def aerial_side(x,y,side_ft,out,pixels=1800,territory="virginia_beach"):
     side=max(250,min(2400,float(side_ft)))
+    if get_profile(territory).get("imagery_kind")=="tile_server":
+        download_tiled_image(x,y,side,out,pixels,territory);return
     url,params=image_request_params(x,y,side,pixels,territory);download_image(url,params,out,pixels)
 
 def lonlat_offset(lon,lat,dx_ft,dy_ft):
@@ -830,9 +925,9 @@ from datetime import datetime
 from PIL import Image,ImageTk,ImageDraw
 import numpy as np
 
-APP_VERSION='0.11.14'
+APP_VERSION='0.11.15'
 DETECTOR_BASELINE_VERSION='0.11.7'
-TERRITORY_LOGIC_VERSION='0.11.14'
+TERRITORY_LOGIC_VERSION='0.11.15'
 CANDIDATE_THRESHOLD=0.07
 TOWER_CHILLER_THRESHOLD=0.35
 LARGE_PACKAGED_THRESHOLD=0.45
@@ -1449,7 +1544,7 @@ def norfolk_small_warehouse_clutter_reject(z,d,thermal_detections):
 
 def high_value_medical_manual_review(z):
     """Keep large medical campuses visible even when fanless heat rejection evades CV."""
-    if (z.get('territory') or 'virginia_beach') not in ('norfolk','chesapeake','newport_news','hampton','suffolk'):return False
+    if (z.get('territory') or 'virginia_beach') not in ('norfolk','chesapeake','newport_news','hampton','suffolk','portsmouth'):return False
     ctx=property_context(z);largest=float(z.get('largest') or 0)
     medical=any(k in ctx for k in ('HOSPITAL','MEDICAL CENTER','HEALTH CARE'))
     residential=any(k in ctx for k in ('APART','CONDO','TOWN HOUSE','TOWNHOUSE','TOWNHOME'))
@@ -1717,7 +1812,7 @@ class App:
     def __init__(self,r):
         self.r=r;self.rows=[];self.cv=None;self.scan_running=False;self.discovery_running=False;self.last_scan_root=None;self.review_csv_path=None
         self.active_territory='norfolk';self.discovery_report={}
-        r.title(f'HVAC Territory Discovery v{APP_VERSION} — Hampton + Norfolk + Suffolk + Virginia Beach');r.geometry('1820x930')
+        r.title(f'HVAC Territory Discovery v{APP_VERSION} — Hampton + Norfolk + Portsmouth + Virginia Beach');r.geometry('1820x930')
         t=ttk.Frame(r,padding=10);t.pack(fill='x')
         ttk.Label(t,text='City:').grid(row=0,column=0);self.city=tk.StringVar(value='Norfolk')
         self.cityb=ttk.Combobox(t,textvariable=self.city,values=[p['name'] for p in PROFILES.values() if p.get('enabled',True)],state='readonly',width=17);self.cityb.grid(row=0,column=1,padx=5);self.cityb.bind('<<ComboboxSelected>>',self.change_city)
@@ -1727,7 +1822,7 @@ class App:
         self.discb=ttk.Button(t,text='1. Discover + Prescreen',command=self.start);self.discb.grid(row=0,column=8,padx=8)
         self.scanb=ttk.Button(t,text='2. Analyze Prescreened',command=self.analyze_prescreened);self.scanb.grid(row=0,column=9,padx=5)
         self.openb=ttk.Button(t,text='Open Existing Scan',command=self.load_existing_scan);self.openb.grid(row=0,column=10,padx=8)
-        self.st=tk.StringVar(value=f'v{APP_VERSION} adds Suffolk official GIS with preflighted VGIN imagery; Chesapeake and Newport News remain paused — frozen v0.0.12 models.');ttk.Label(r,textvariable=self.st).pack(fill='x',padx=10)
+        self.st=tk.StringVar(value=f'v{APP_VERSION} adds Portsmouth official GIS and municipal aerial tiles; Chesapeake, Newport News, and Suffolk remain paused — frozen v0.0.12 models.');ttk.Label(r,textvariable=self.st).pack(fill='x',padx=10)
         cols=('rank','facility','address','cv','opp','evidence','maxp','review','note','largest','bldgs','mi','land','tier','pre','prewhy','gis','source')
         heads={'rank':'#','facility':'FACILITY','address':'ADDRESS','cv':'TRIAGE','opp':'OPP','evidence':'MECHANICAL EVIDENCE','maxp':'MAX P','review':'USER','note':'NOTE','largest':'LARGEST','bldgs':'BLDGS','mi':'MI','land':'LAND USE','tier':'GIS TIER','pre':'PRE','prewhy':'PRESCREEN REASON','gis':'GIS','source':'FOOTPRINT'}
         widths=(42,205,170,72,52,245,55,72,150,82,48,48,145,65,42,170,48,85)
@@ -1849,7 +1944,7 @@ class App:
                 f'HVAC Territory Discovery v{APP_VERSION}\nCities: {city_names}\nCore detector baseline: v{DETECTOR_BASELINE_VERSION}\nTerritory logic: v{TERRITORY_LOGIC_VERSION}\n'
                 f'Frozen detector pipeline v0.0.12\nPrimary thresholds 0.07 / 0.35 / 0.45\nParcel buffer: {PARCEL_BUFFER_FT:.0f} ft\n\n'
                 f'Properties analyzed: {len(rows)}\nSTRONG: {strong}\nREVIEW: {review}\nSurfaced total: {surf}\nQUIET: {quiet}\nNeighbor-assigned duplicate evidence: {reassigned}\n\n'
-                'v0.11.14 retains the model weights and thresholds, preserves prior detector behavior, adds Suffolk official GIS with preflighted VGIN imagery, and keeps Chesapeake and Newport News paused pending better imagery.\n'
+                'v0.11.15 retains the model weights and thresholds, adds Portsmouth official GIS and municipal aerial tiles, and keeps Chesapeake, Newport News, and Suffolk paused pending dependable imagery.\n'
                 'See SCAN_METADATA.json for discovery coverage/candidate limits and data sources, and DISCOVERY_AUDIT.json for prescreened and filtered displayed candidates.\n'
                 'Mechanical evidence is geographically de-duplicated across views and properties. Ordinary outside-parcel and context-rejected detections do not rank; Norfolk equipment on an already-joined building footprint is REVIEW-only.\n'
                 'QUIET does not prove that valuable equipment is absent. Imagery age, shadows, roof displacement, GIS completeness, and hidden equipment can affect detection.\n',encoding='utf-8')

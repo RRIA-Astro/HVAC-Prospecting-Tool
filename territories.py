@@ -2,7 +2,8 @@
 
 Norfolk sources were verified on 2026-09-18. Chesapeake sources, Newport News,
 Hampton sources and the statewide VGIN orthophoto service were verified on 2026-09-20. Suffolk
-sources were verified on 2026-09-21.
+sources were verified on 2026-09-21. Portsmouth sources and municipal aerial tiles were verified
+on 2026-09-21.
 Keep raw assessment classifications separate from the normalized detector context.
 """
 import re
@@ -90,6 +91,7 @@ PROFILES = {
     },
     "suffolk": {
         "key": "suffolk", "name": "Suffolk",
+        "enabled": False,
         "default_address": "2800 Godwin Blvd", "default_radius": "0.5",
         "address": "https://suffolkgis.suffolk-va.net/hosting/rest/services/Parcel_Viewer/Parcels_and_Zoning/FeatureServer/0/query",
         "parcel": "https://suffolkgis.suffolk-va.net/hosting/rest/services/Parcel_Viewer/Parcels_and_Zoning/FeatureServer/4/query",
@@ -101,6 +103,23 @@ PROFILES = {
         "imagery_kind": "map_server", "imagery_label": "VGIN VBMP most-recent imagery (2022/2023/2025)",
         "assessment": "https://suffolkgis.suffolk-va.net/hosting/rest/services/Parcel_Viewer/Parcels_and_Zoning/FeatureServer/10/query",
         "assessment_label": "Suffolk parcel land-book assessment",
+        "query_chunk": 2000, "require_buildings": True,
+    },
+    "portsmouth": {
+        "key": "portsmouth", "name": "Portsmouth",
+        "default_address": "3636 High St", "default_radius": "0.5",
+        "address": "https://services1.arcgis.com/nGsguNiHLn7MU4R4/arcgis/rest/services/Portsmouth_Addresses/FeatureServer/0/query",
+        "parcel": "https://services1.arcgis.com/nGsguNiHLn7MU4R4/arcgis/rest/services/Parcels_new/FeatureServer/0/query",
+        "parcel_fields": "FID,CPN,MPN,SITE_ADDRE,OWNER,ACRES,LAND_VAL,BLDG_VAL,TOTAL_VAL,NEIGHBORHD,ZONING,ZONING_K,TYPE_PROP,BLDG_TYPE,TOT_SQ_FT,BLDG_DATE,PROP_TYPE,TYPE_BLDG,CLAS,SUBCLASS_T",
+        "parcel_oid": "FID",
+        "building": "https://services1.arcgis.com/nGsguNiHLn7MU4R4/arcgis/rest/services/StandardLayers/FeatureServer/3/query",
+        "building_source": "PORTSMOUTH CITY", "building_where": "1=1",
+        "fallback_building": "https://dsfmportal.dcr.virginia.gov/server/rest/services/CivilReference/Civil_Reference_Layers/MapServer/2/query",
+        "imagery": "https://tiles.arcgis.com/tiles/nGsguNiHLn7MU4R4/arcgis/rest/services/Aerials_2022/MapServer",
+        "imagery_kind": "tile_server", "imagery_label": "Portsmouth municipal aerial 2022",
+        "tile_min_zoom": 16, "tile_max_zoom": 21, "tile_native_pixels": 1200,
+        "assessment": "https://services1.arcgis.com/nGsguNiHLn7MU4R4/arcgis/rest/services/Parcels_new/FeatureServer/0/query",
+        "assessment_label": "Portsmouth parcel assessment",
         "query_chunk": 2000, "require_buildings": True,
     },
 }
@@ -150,7 +169,7 @@ HAMPTON_BUILDING_CONTEXT = {
 
 def get_profile(key="virginia_beach"):
     if key not in PROFILES:
-        raise ValueError(f"Unsupported territory: {key!r}. Select Hampton, Norfolk, Suffolk, or Virginia Beach.")
+        raise ValueError(f"Unsupported territory: {key!r}. Select Hampton, Norfolk, Portsmouth, or Virginia Beach.")
     return PROFILES[key]
 
 
@@ -173,7 +192,7 @@ DIRECTIONS = {"NORTH": "N", "SOUTH": "S", "EAST": "E", "WEST": "W"}
 
 def canonical_address(text):
     text = text.split(",", 1)[0].upper().strip()
-    text = re.sub(r"\s+(?:HAMPTON|NORFOLK|NEWPORT NEWS|VIRGINIA BEACH|CHESAPEAKE|SUFFOLK)(?:\s+VA(?:\s+\d{5})?)?$", "", text)
+    text = re.sub(r"\s+(?:HAMPTON|NORFOLK|NEWPORT NEWS|VIRGINIA BEACH|CHESAPEAKE|SUFFOLK|PORTSMOUTH)(?:\s+VA(?:\s+\d{5})?)?$", "", text)
     words = re.sub(r"[.\s]+", " ", text).strip().split()
     return " ".join(STREET_TYPES.get(w, DIRECTIONS.get(w, w)) for w in words)
 
@@ -246,6 +265,27 @@ def suffolk_address_where(text):
     return " AND ".join(clauses)
 
 
+def portsmouth_address_where(text):
+    """Match Portsmouth address components without relying on loose substrings."""
+    normalized = canonical_address(text)
+    match = re.fullmatch(r"(\d+[A-Z]?)\s+(.+)", normalized)
+    if not match:
+        raise ValueError("Enter a Portsmouth street address, including its house number.")
+    number, street = match.groups()
+    words = street.split()
+    pre = words.pop(0) if words and words[0] in ("N", "S", "E", "W", "NE", "NW", "SE", "SW") else ""
+    known_types = set(STREET_TYPES.values()) | {"AVE", "ST", "RD", "BLVD", "DR", "CT", "CIR", "LN", "PL", "PKWY", "TER", "HWY", "TRL", "SQ"}
+    if words and words[-1] in known_types:
+        words.pop()
+    if not words:
+        raise ValueError("Enter the street name as well as its house number.")
+    clauses = ["ST_NUM = '" + number.replace("'", "''") + "'",
+               "UPPER(ST_NAME) = '" + " ".join(words).replace("'", "''") + "'"]
+    if pre:
+        clauses.append("UPPER(ST_DIR) = '" + pre + "'")
+    return " AND ".join(clauses)
+
+
 def chesapeake_land_use(attributes, classes):
     """Return auditable Chesapeake parcel-class context for existing prescreen rules."""
     code = str(attributes.get("PROPCLASS") or "").strip()
@@ -293,6 +333,15 @@ def suffolk_land_use(rows):
             if field=="building_use" and value in ("MINI-WAREHOUSE", "MINI WAREHOUSE"):
                 value="SELF STORAGE"
             if value and value not in values:values.append(value)
+    return " | ".join(values) or "UNKNOWN"
+
+
+def portsmouth_land_use(attributes):
+    """Retain Portsmouth's descriptive building/use fields and useful owner context."""
+    values=[]
+    for field in ("BLDG_TYPE", "TYPE_PROP", "OWNER"):
+        value=" ".join(str(attributes.get(field) or "").upper().split())
+        if value and value not in values:values.append(value)
     return " | ".join(values) or "UNKNOWN"
 
 

@@ -13,6 +13,7 @@ from territories import (ASSESSMENT_FIELDS,PROFILES,NORFOLK_BUILDING_CONTEXT,CHE
                          NEWPORT_NEWS_BUILDING_CONTEXT,HAMPTON_BUILDING_CONTEXT,assessment_address,assessment_choice,canonical_address,
                          chesapeake_address_where,chesapeake_land_use,get_profile,newport_news_address_where,
                          newport_news_land_use,hampton_address_where,hampton_land_use,suffolk_address_where,suffolk_land_use,
+                         portsmouth_address_where,portsmouth_land_use,
                          norfolk_address_where,norfolk_land_use,numeric_id)
 
 
@@ -32,10 +33,11 @@ def square(lon=-76.28,lat=36.85,side=100):
 
 class TerritoryNormalizationTests(unittest.TestCase):
     def test_profiles_use_separate_city_sources(self):
-        vb,nf,ch,nn,hm,sf=(get_profile(),get_profile('norfolk'),get_profile('chesapeake'),
-                           get_profile('newport_news'),get_profile('hampton'),get_profile('suffolk'))
+        vb,nf,ch,nn,hm,sf,pm=(get_profile(),get_profile('norfolk'),get_profile('chesapeake'),
+                              get_profile('newport_news'),get_profile('hampton'),get_profile('suffolk'),
+                              get_profile('portsmouth'))
         for field in ('address','parcel','building'):
-            self.assertEqual(len({vb[field],nf[field],ch[field],nn[field],hm[field],sf[field]}),6)
+            self.assertEqual(len({vb[field],nf[field],ch[field],nn[field],hm[field],sf[field],pm[field]}),7)
         self.assertEqual(nf['imagery_kind'],'map_server')
         self.assertEqual(vb['imagery_kind'],'image_server')
         self.assertIn('/AerialPhotos/2025/MapServer/export',nf['imagery'])
@@ -50,10 +52,14 @@ class TerritoryNormalizationTests(unittest.TestCase):
         self.assertEqual(hm['imagery_layers'],'show:13')
         self.assertIn('/Parcel_Viewer/Parcels_and_Zoning/FeatureServer/4/query',sf['parcel'])
         self.assertIn('/FeatureServer/2/query',sf['building']);self.assertEqual(sf['imagery'],ch['imagery'])
-        self.assertFalse(ch['enabled']);self.assertFalse(nn['enabled']);self.assertTrue(hm['require_buildings']);self.assertTrue(sf['require_buildings'])
+        self.assertIn('/Parcels_new/FeatureServer/0/query',pm['parcel'])
+        self.assertIn('/StandardLayers/FeatureServer/3/query',pm['building'])
+        self.assertEqual(pm['imagery_kind'],'tile_server');self.assertIn('Aerials_2022/MapServer',pm['imagery'])
+        self.assertFalse(ch['enabled']);self.assertFalse(nn['enabled']);self.assertFalse(sf['enabled'])
+        self.assertTrue(hm['require_buildings']);self.assertTrue(pm['require_buildings'])
 
     def test_unknown_territory_never_silently_uses_vb(self):
-        with self.assertRaisesRegex(ValueError,'Unsupported territory'):get_profile('portsmouth')
+        with self.assertRaisesRegex(ValueError,'Unsupported territory'):get_profile('richmond')
         with self.assertRaises(ValueError):app.image_request_params(-76.28,36.85,800,territory='unknown')
 
     def test_numeric_gpin_join_does_not_round_or_accept_sql(self):
@@ -77,6 +83,9 @@ class TerritoryNormalizationTests(unittest.TestCase):
         self.assertEqual(canonical_address('2800 Godwin Boulevard, Suffolk, VA 23434'),'2800 GODWIN BLVD')
         self.assertEqual(suffolk_address_where('2800 Godwin Boulevard, Suffolk, VA 23434'),
                          "ADDRNUMBER = '2800' AND UPPER(ADDRNAME) = 'GODWIN' AND UPPER(ADDRSTTYPE) = 'BLVD'")
+        self.assertEqual(canonical_address('3636 High Street, Portsmouth, VA 23707'),'3636 HIGH ST')
+        self.assertEqual(portsmouth_address_where('3636 High Street, Portsmouth, VA 23707'),
+                         "ST_NUM = '3636' AND UPPER(ST_NAME) = 'HIGH'")
 
     def test_chesapeake_class_and_building_context_is_descriptive(self):
         classes={'4341':'COMMERCIAL - MEDICAL OFFICE','1010':'RESIDENTIAL - SINGLE FAMILY'}
@@ -121,6 +130,14 @@ class TerritoryNormalizationTests(unittest.TestCase):
         self.assertFalse(app.prescreen({'land':storage,'zone':'M-1','facility':'','facility_kind':'',
                                         'fcodes':[],'largest':20000,'avg':3000,'count':10,
                                         'buildings':[]},10000)[0])
+
+    def test_portsmouth_parcel_context_keeps_use_and_owner(self):
+        attributes={'BLDG_TYPE':'Multiple Buildings','TYPE_PROP':'Exempt Commercial','OWNER':'Maryview Hospital'}
+        land=portsmouth_land_use(attributes)
+        self.assertEqual(land,'MULTIPLE BUILDINGS | EXEMPT COMMERCIAL | MARYVIEW HOSPITAL')
+        self.assertTrue(app.prescreen({'land':land,'zone':'GMU','facility':'','facility_kind':'',
+                                       'fcodes':[],'largest':171974,'avg':50000,'count':4,
+                                       'buildings':[]},10000)[0])
 
     def test_assessment_address_is_site_not_owner_address(self):
         row={'property_street_number':'800.0','property_street_direction':'E','property_street_name':'City Hall',
@@ -268,6 +285,18 @@ class TerritoryRoutingTests(unittest.TestCase):
         self.assertEqual(url,get_profile('suffolk')['address']);self.assertEqual(params['outSR'],'4326')
         self.assertIn("ADDRNUMBER = '5818'",params['where']);self.assertIn('PARCELID',params['outFields'])
 
+    def test_portsmouth_geocode_uses_primary_city_address_point(self):
+        duplicate={'attributes':{'OBJECTID':2,'CPN':'03550010','Address_Ne':'3636 HIGH ST',
+                                  'SUITE':'A','duplicate':1},'geometry':{'x':-76.3475,'y':36.8366}}
+        primary={'attributes':{'OBJECTID':1,'CPN':'03550010','Address_Ne':'3636 HIGH ST',
+                                'SUITE':' ','duplicate':0},'geometry':{'x':-76.34767,'y':36.83650}}
+        with patch.object(app,'gj',return_value={'features':[duplicate,primary]}) as request:
+            self.assertEqual(app.geocode('3636 High St','portsmouth'),(-76.34767,36.83650))
+        url,params=request.call_args.args
+        self.assertEqual(url,get_profile('portsmouth')['address']);self.assertEqual(params['outSR'],'4326')
+        self.assertEqual(params['where'],"ST_NUM = '3636' AND UPPER(ST_NAME) = 'HIGH'")
+        self.assertIn('Address_Ne',params['outFields'])
+
     def test_vb_geocode_keeps_original_search_contract(self):
         meta={'fields':[{'name':'FULL_ADDR','type':'esriFieldTypeString'}]}
         hits={'features':[{'geometry':{'x':-76,'y':36.8}}]}
@@ -363,6 +392,22 @@ class TerritoryRoutingTests(unittest.TestCase):
         self.assertEqual(row['zone'],'SPLT B-2, RR');self.assertTrue(row['assessment_matched'])
         self.assertEqual(row['parcel_gpin'],'0444-56-6972');self.assertEqual(row['owner_name'],'LOUISE OBICI MEMORIAL HOSPITAL')
         self.assertEqual(parcel_query.call_args.args[1]['outSR'],'4326')
+
+    def test_portsmouth_parcel_is_self_assessing_and_auditable(self):
+        feature={'attributes':{'FID':13475,'CPN':'03550010','MPN':'0355-0010','SITE_ADDRE':'3636 HIGH ST',
+                               'OWNER':'MARYVIEW HOSPITAL','TOT_SQ_FT':406344,'TYPE_PROP':'EXEMPT COMMERCIAL',
+                               'BLDG_TYPE':'MULTIPLE BUILDINGS','PROP_TYPE':7,'TYPE_BLDG':0,'CLAS':0,
+                               'SUBCLASS_T':' ','ZONING':'GMU','NEIGHBORHD':'0355'},
+                 'geometry':{'rings':[square(lon=-76.34767,lat=36.83650,side=500)]}}
+        with patch.object(app,'pages',return_value=[feature]) as parcel_query:
+            rows=app.load_parcels(-76.34767,36.83650,.5,'portsmouth')
+        row=rows[0]
+        self.assertEqual(row['gpin'],'03550010');self.assertEqual(row['address'],'3636 HIGH ST')
+        self.assertIn('MARYVIEW HOSPITAL',row['land']);self.assertEqual(row['facility_hint'],'MARYVIEW HOSPITAL')
+        self.assertEqual(row['zone'],'GMU');self.assertTrue(row['assessment_matched'])
+        self.assertEqual(row['assessed_building_ft2'],406344);self.assertEqual(row['raw_classification'],'7 | 0 | 0')
+        self.assertEqual(parcel_query.call_args.args[1]['outSR'],'4326')
+        self.assertEqual(parcel_query.call_args.args[1]['orderByFields'],'FID ASC')
 
     def test_hampton_assessment_fetch_is_batched(self):
         feature={'attributes':{'LRSN':7001649,'UseDesc':'Hospital'}}
@@ -461,6 +506,16 @@ class TerritoryRoutingTests(unittest.TestCase):
             _,source,_=app.load_buildings(-76.5816,36.7731,.5,'suffolk')
         self.assertEqual(source,'SUFFOLK CITY');self.assertEqual(query.call_args.args[6],2000)
 
+    def test_portsmouth_building_source_is_retained(self):
+        feature={'attributes':{'OBJECTID':9,'AREA':40000},
+                 'geometry':{'rings':[square(lon=-76.34767,lat=36.83650,side=200)]}}
+        with patch.object(app,'pages',return_value=[feature]):
+            rows=app._query_buildings(get_profile('portsmouth')['building'],-76.34767,36.83650,.5,'*',city='portsmouth')
+        self.assertEqual(rows[0]['fcode'],'');self.assertIsNone(rows[0]['feature_code'])
+        with patch.object(app,'_query_buildings',return_value=rows) as query:
+            _,source,_=app.load_buildings(-76.34767,36.83650,.5,'portsmouth')
+        self.assertEqual(source,'PORTSMOUTH CITY');self.assertEqual(query.call_args.args[6],2000)
+
     def test_norfolk_no_footprints_stops_before_false_quiet_prescreen(self):
         with patch.object(app,'load_parcels',return_value=[]),patch.object(app,'load_osm_names',return_value=[]),patch.object(app,'load_buildings',return_value=([],'NONE',['service down'])):
             with self.assertRaisesRegex(RuntimeError,'stopped before prescreening'):app.discover(-76.28,36.85,.5,10000,'norfolk')
@@ -484,6 +539,11 @@ class TerritoryRoutingTests(unittest.TestCase):
         with patch.object(app,'load_parcels',return_value=[]),patch.object(app,'load_osm_names',return_value=[]),patch.object(app,'load_buildings',return_value=([],'NONE',['service down'])):
             with self.assertRaisesRegex(RuntimeError,'Suffolk building footprints.*stopped before prescreening'):
                 app.discover(-76.5816,36.7731,.5,10000,'suffolk')
+
+    def test_portsmouth_no_footprints_stops_before_false_quiet_prescreen(self):
+        with patch.object(app,'load_parcels',return_value=[]),patch.object(app,'load_osm_names',return_value=[]),patch.object(app,'load_buildings',return_value=([],'NONE',['service down'])):
+            with self.assertRaisesRegex(RuntimeError,'Portsmouth building footprints.*stopped before prescreening'):
+                app.discover(-76.34767,36.83650,.5,10000,'portsmouth')
 
     def test_discovery_records_candidate_cap_and_unmatched(self):
         parcels=[{'gpin':str(n),'address':f'{n} Test Rd','land':'UNKNOWN','zone':'','lon':-76.28,'lat':36.85,'rings':[square()], 'psq':10000,'assessment_matched':False} for n in range(251)]
@@ -516,6 +576,22 @@ class ImageryAndAuditTests(unittest.TestCase):
         self.assertEqual(hmp['layers'],'show:13')
         self.assertEqual(sfp['layers'],'show:0')
 
+    def test_portsmouth_uses_bounded_tile_mosaic_not_export(self):
+        profile=get_profile('portsmouth')
+        self.assertEqual(profile['imagery_kind'],'tile_server');self.assertNotIn('/export',profile['imagery'])
+        with tempfile.TemporaryDirectory() as td:
+            out=Path(td)/'portsmouth.jpg'
+            def tile(_profile,zoom,row,column):
+                color=((column*37)%255,(row*53)%255,((row+column)*71)%255)
+                return column,row,Image.new('RGB',(256,256),color)
+            with patch.object(app,'_download_tile',side_effect=tile) as request:
+                app.download_tiled_image(-76.34767,36.83650,900,out,600,'portsmouth')
+            self.assertTrue(request.called);self.assertLessEqual(request.call_count,100)
+            with Image.open(out) as image:self.assertEqual(image.size,(600,600))
+        with patch.object(app,'download_tiled_image') as mosaic:
+            app.aerial_side(-76.34767,36.83650,900,'unused.jpg',1800,'portsmouth')
+        mosaic.assert_called_once()
+
     def test_transient_503_is_retried_with_bounded_backoff(self):
         error=app.urllib.error.HTTPError('https://example.test',503,'temporarily unavailable',None,None)
         good=io.BytesIO(b'{"features":[]}')
@@ -535,12 +611,13 @@ class ImageryAndAuditTests(unittest.TestCase):
         self.assertEqual(app.csv_source_fields({'territory':'newport_news'})['city'],'Newport News')
         self.assertEqual(app.csv_source_fields({'territory':'hampton'})['city'],'Hampton')
         self.assertEqual(app.csv_source_fields({'territory':'suffolk'})['city'],'Suffolk')
+        self.assertEqual(app.csv_source_fields({'territory':'portsmouth'})['city'],'Portsmouth')
         self.assertEqual(app.csv_source_fields({})['city'],'Virginia Beach')
 
     def test_scan_metadata_identifies_frozen_baseline_and_sources(self):
         d=app.make_scan_metadata([{'territory':'hampton'}],{'truncated':True})
         self.assertEqual(d['detector_baseline_version'],'0.11.7');self.assertEqual(d['model_pipeline_version'],'0.0.12')
-        self.assertEqual(d['territory_logic_version'],'0.11.14')
+        self.assertEqual(d['territory_logic_version'],'0.11.15')
         self.assertEqual(d['data_sources'][0]['city'],'Hampton');self.assertTrue(d['discovery']['truncated'])
 
     def test_all_campus_views_use_the_row_territory_and_manifest(self):
@@ -618,7 +695,8 @@ class AppStateTests(unittest.TestCase):
     def test_default_and_city_change_do_not_mix_existing_rows(self):
         self.assertEqual(self.ui.active_territory,'norfolk');self.assertEqual(self.ui.rad.get(),'0.5')
         self.assertIn('Hampton',self.ui.cityb.options['values'])
-        self.assertIn('Suffolk',self.ui.cityb.options['values'])
+        self.assertIn('Portsmouth',self.ui.cityb.options['values'])
+        self.assertNotIn('Suffolk',self.ui.cityb.options['values'])
         self.assertNotIn('Newport News',self.ui.cityb.options['values'])
         self.assertNotIn('Chesapeake',self.ui.cityb.options['values'])
         self.ui.rows=[{'address':'Old Norfolk property'}];self.ui.last_scan_root='old';self.ui.review_csv_path='old'

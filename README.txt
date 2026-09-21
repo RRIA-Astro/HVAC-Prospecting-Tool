@@ -1,5 +1,5 @@
-HVAC Territory Discovery v0.11.14 — Suffolk Expansion
-======================================================
+HVAC Territory Discovery v0.11.15 — Portsmouth Expansion
+=========================================================
 
 Purpose
 -------
@@ -10,44 +10,39 @@ equipment is absent, and REVIEW still requires a salesperson to inspect the imag
 
 What changed
 ------------
-v0.11.14 adds Suffolk while preserving the v0.11.7 detector weights, primary thresholds, and
-existing city-specific detector behavior. Suffolk uses the city's public address, parcel, building-
-footprint, and parcel land-book services. Official address points supply facility names; parcel and
-assessment records join by exact assessor account number. Raw use, neighborhood, class, owner,
-zoning, borough, and source fields remain in the discovery/audit path.
+v0.11.15 adds Portsmouth while preserving the v0.11.7 detector weights and operating thresholds.
+Portsmouth uses current city address points, assessor-enriched parcels, and official building
+footprints. Parcel building type, property type, owner, zoning, neighborhood, assessed building area,
+and raw classifications remain in the audit path.
 
-Suffolk imagery uses the statewide VGIN VBMP most-recent orthophoto service. Production-size
-1800 x 1800 frames were checked at Sentara Obici Hospital, King's Fork High School, QVC, and the
-Harbour View medical campus. Equipment, vehicles, and building edges were distinguishable at all
-four sites. Very bright white roofs can still lose contrast, especially on large warehouses; this is
-an explicit Suffolk limitation rather than a detector change.
+Portsmouth publishes its 2022 municipal aerial as a high-resolution tiled service rather than an
+export endpoint. The app now assembles exact centered frames from bounded Web-Mercator tile mosaics,
+validates every tile, caches immutable tiles locally, and resizes only after the requested frame is
+cropped. The resulting 1800 x 1800 Maryview frame retains clear rooftop and mechanical-yard detail.
 
-A live 0.5-mile discovery centered at 2800 Godwin Blvd returned 857 parcels, 888 official Suffolk
-building footprints, 851 footprint joins, 144 displayed candidates, and 20 prescreen-passing
-properties without truncation. Three parcels lacked a land-book match and were retained as UNKNOWN
-rather than assigned a guessed use. Suffolk MINI-WAREHOUSE assessment text is normalized to SELF
-STORAGE so it does not receive warehouse-priority treatment.
+A live 0.5-mile discovery centered at 3636 High St returned 1,208 parcels and 1,881 official
+Portsmouth building footprints, joined 1,764 footprints, and produced 33 prescreen-passing properties.
+The general 250-row display limit was reached, but all 33 passing properties were included first.
 
-Chesapeake and Newport News are paused because field scans showed their available orthophotos were
-not reliable enough for blind deployment. Both are hidden from the city selector, but their adapters
-and regression coverage remain in source for a later imagery solution. Neither city is silently
-rerouted to another jurisdiction's data.
+Suffolk is now paused after a blind field test produced three major high-value false negatives among
+the first five reviewed sites and only three REVIEW results across 107 candidates. Chesapeake and
+Newport News remain paused for the same underlying deployment concern: their available imagery is not
+dependable enough for blind HVAC prospecting. All three adapters remain in source for diagnostics and
+future imagery replacements, but they are hidden from the city selector.
 
-Suffolk safeguards
-------------------
-  * Search centers use normalized component matching against official address records.
-  * Primary and unitless base points are preferred over suite records on multi-address campuses.
-  * Parcels join to official place names and land-book rows by exact assessor account number.
-  * Assessment requests are batched, not scraped property by property.
-  * Unmatched assessments remain UNKNOWN and generate a discovery warning.
+Portsmouth safeguards
+---------------------
+  * Search centers use normalized official address components and prefer primary, unitless records.
+  * Parcel assessment context comes from the same official polygon record; no secondary scrape or
+    approximate assessment join is required.
   * City building footprints are required; discovery stops before prescreening if neither the
-    Suffolk layer nor the statewide fallback returns usable footprints.
-  * ArcGIS JSON errors, blank imagery, and wrong-size image exports stop before model inference.
+    Portsmouth layer nor the statewide fallback returns usable footprints.
+  * Tile mosaics are limited to 100 tiles, checked for readable 256 x 256 imagery, cached by service
+    and coordinate, and rejected if the final frame is blank.
   * The existing context-only manual-review route for medical campuses with a building at least
-    100,000 ft2 includes Suffolk. It does not claim that equipment was detected.
+    100,000 ft2 includes Portsmouth. It does not claim that equipment was detected.
 
-All prior Hampton, Norfolk, and Virginia Beach controls remain. Chesapeake and Newport News remain
-callable in source for diagnostic/regression purposes but are not selectable deployment cities.
+All prior Hampton, Norfolk, and Virginia Beach controls remain unchanged.
 
 Detector contract
 -----------------
@@ -63,31 +58,30 @@ FROZEN_DETECTION_CONTRACT.json protects model hashes, operating points, preserve
 and bounded territory rules. The complete ResNet18 checkpoint is 22,410,981 bytes with SHA256
 7dbdd679df66598a8d9e63f983507eb7900af9553595a3bb250ee6e4795e6ffd.
 
-Recommended Suffolk blind test
-------------------------------
+Recommended Portsmouth blind test
+---------------------------------
 1. Build and extract the Windows artifact, keeping the entire folder together.
-2. Select Suffolk. The default center is 2800 Godwin Blvd and the default radius is 0.5 mile.
+2. Select Portsmouth. The default center is 3636 High St and the default radius is 0.5 mile.
 3. Leave the minimum building size at 10,000 ft2 for the first run.
-4. Click Discover + Prescreen. Confirm Suffolk addresses, SUFFOLK CITY footprints, and VGIN VBMP
-   imagery. If more than 250 candidates are reported, reduce the radius.
+4. Click Discover + Prescreen. Confirm Portsmouth addresses, PORTSMOUTH CITY footprints, and
+   Portsmouth municipal aerial 2022 imagery. Reduce the radius if prescreen-passing rows are omitted.
 5. Analyze the passing properties. Review every STRONG and REVIEW result and spot-check QUIET sites.
 6. Send prospecting_results.csv first. Send individual property folders only for definite misses,
    confusing false positives, or unusually useful controls; the full scan archive is not required.
 
-Use a genuinely new Suffolk area rather than the four preflight sites for the first blind test. This
-establishes how well the frozen detector generalizes across Suffolk's variable imagery before any
-detector tuning.
+Use a genuinely new Portsmouth area rather than Maryview for the first blind test. Initial tile
+downloads can be slower than export imagery; overlapping later views reuse the local tile cache.
 
 City behavior
 -------------
-The app starts with Norfolk selected. Available cities are Hampton, Norfolk, Suffolk, and Virginia Beach.
+The app starts with Norfolk selected. Available cities are Hampton, Norfolk, Portsmouth, and Virginia Beach.
 Changing the city clears discovered rows so data sources cannot be mixed. Each scan covers only the
 selected city's parcel inventory, even when its radius crosses a municipal boundary.
 
 Virginia Beach uses its 2025 ImageServer imagery and existing parcel/building services. Norfolk
 uses its 2025 MapServer imagery, city parcel/building services, and FY27 assessment join. Hampton
-uses official address/parcel/building/assessment layers and 2026 municipal aerial imagery. Suffolk
-uses official city address/parcel/building/land-book layers and statewide VGIN VBMP imagery.
+uses official address/parcel/building/assessment layers and 2026 municipal aerial imagery. Portsmouth
+uses official city address/parcel/building layers and 2022 municipal aerial tiles.
 
 All active cities retain the Virginia Civil Reference building-footprint fallback. The actual
 footprint source is recorded. Shadows, roof displacement, imagery age, tree cover, screened
@@ -119,9 +113,9 @@ The workflow derives the executable name from APP_VERSION, runs the full offline
 checkpoint archives and hashes, loads the source models, builds the portable app, compares bundled
 model hashes to source, loads the bundled models, and publishes:
 
-  HVAC_Territory_Discovery_v01114_Windows.zip
+  HVAC_Territory_Discovery_v01115_Windows.zip
 
-Extract it and run HVAC_Territory_Discovery_v01114.exe. Keep the bundled files together.
+Extract it and run HVAC_Territory_Discovery_v01115.exe. Keep the bundled files together.
 
 Source validation (Python 3.12)
 -------------------------------
@@ -135,6 +129,11 @@ the source/bundled model loading and Windows packaging checks.
 
 Official source references (verified 2026-09-21)
 ------------------------------------------------
+https://portsmouthgis.maps.arcgis.com/apps/webappviewer/index.html?id=2e16d709ed954e76b5b9828d79110bd4
+https://services1.arcgis.com/nGsguNiHLn7MU4R4/arcgis/rest/services/Portsmouth_Addresses/FeatureServer/0
+https://services1.arcgis.com/nGsguNiHLn7MU4R4/arcgis/rest/services/Parcels_new/FeatureServer/0
+https://services1.arcgis.com/nGsguNiHLn7MU4R4/arcgis/rest/services/StandardLayers/FeatureServer/3
+https://tiles.arcgis.com/tiles/nGsguNiHLn7MU4R4/arcgis/rest/services/Aerials_2022/MapServer
 https://suffolkgis.suffolk-va.net/hosting/rest/services/Parcel_Viewer/Parcels_and_Zoning/FeatureServer/0
 https://suffolkgis.suffolk-va.net/hosting/rest/services/Parcel_Viewer/Parcels_and_Zoning/FeatureServer/2
 https://suffolkgis.suffolk-va.net/hosting/rest/services/Parcel_Viewer/Parcels_and_Zoning/FeatureServer/4

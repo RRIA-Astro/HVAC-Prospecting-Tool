@@ -1,0 +1,44 @@
+HVAC Territory Discovery v0.11.15 — Validation Notes
+=====================================================
+
+Release scope
+-------------
+Portsmouth acquisition, tiled imagery, and territory routing only. The v0.11.7 detector baseline and
+v0.0.12 model assets are unchanged. The only protected ranking extension adds Portsmouth to the existing
+context-only manual-review safety for medical campuses with a building at least 100,000 ft2.
+
+Offline coverage
+----------------
+The release suite verifies:
+* exact Portsmouth address parsing and official address-layer routing;
+* duplicate and suite address preference on a shared parcel;
+* self-contained parcel assessment context and FID-based pagination order;
+* auditable building type, property type, owner, classification, zoning, and assessed area;
+* official Portsmouth building footprints and fail-closed fallback behavior;
+* bounded tile-mosaic routing, output dimensions, and the absence of a nonexistent export dependency;
+* selector isolation, scan metadata, and source audit fields;
+* Portsmouth coverage for the existing context-only large-medical-campus manual-review safety;
+* all prior frozen detector and city regression controls.
+
+Live service validation — 2026-09-21
+------------------------------------
+Exact address search succeeded for 3636 High St. A 0.5-mile discovery returned 1,208 parcels and
+1,881 official Portsmouth building footprints, joined 1,764 footprints, and found 33 prescreen-passing
+properties. The general candidate inventory exceeded 250 rows, but prescreen-passing properties sort
+first and all 33 were displayed.
+
+The Portsmouth municipal Aerials_2022 service advertises cached detail through 0.0746 projected meters
+per pixel. The app intentionally selects a bounded level that produces about 1,200 native pixels per
+frame, then resizes the exact crop to the detector's frozen 1,800-pixel contract. This avoids hundreds of
+tile requests per view while preserving visibly useful equipment detail. Tiles are cached locally so
+overlapping property views and later scans do not download them again.
+
+Maryview Medical Center retained clear rooftop and mechanical-yard detail in the production frame.
+Churchland and mixed urban samples had consistent resolution. Bright white roofs can still reduce local
+contrast, so the first deployment test should remain blind and include QUIET spot checks.
+
+Recommended field test
+----------------------
+Run a genuinely new Portsmouth area at 0.5 mile and 10,000 ft2. Review every STRONG and REVIEW result,
+spot-check QUIET sites, and return prospecting_results.csv plus individual folders for definite misses or
+confusing false positives. Initial imagery acquisition may be slower while the tile cache is populated.

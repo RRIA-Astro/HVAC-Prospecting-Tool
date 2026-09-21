@@ -1,0 +1,32 @@
+HVAC Territory Discovery v0.11.15 — Portsmouth Expansion
+=========================================================
+
+Added
+-----
+* Portsmouth is available in the city selector.
+* Official Portsmouth address, assessor-enriched parcel, and building-footprint routes.
+* Exact Portsmouth address matching with duplicate and suite-record preference controls.
+* Portsmouth parcel use, building type, owner, zoning, neighborhood, assessed area, and raw audit fields.
+* High-resolution Portsmouth 2022 municipal aerial tile mosaics with bounded concurrency and local caching.
+* Portsmouth regression coverage for routing, joins, imagery mosaics, fail-closed footprints, selector state,
+  source metadata, and the existing large-medical-campus manual-review safety.
+
+Changed
+-------
+* Suffolk is hidden from the deployment selector after its blind scan showed unacceptable false negatives.
+  Its adapter and tests remain available for diagnostics and a future imagery replacement.
+
+Safeguards
+----------
+* No model asset, primary confidence threshold, inference pass, or existing-city ranking rule changed.
+* Tile frames stop before inference if any tile is missing/unreadable, if a tile is not 256 x 256, if the
+  request exceeds 100 tiles, or if the completed frame is blank.
+* Missing city and fallback footprints stop discovery before prescreening.
+* Chesapeake and Newport News remain hidden pending better imagery.
+
+Live preflight
+--------------
+* 3636 High St, 0.5 mile: 1,208 parcels, 1,881 footprints, 1,764 footprint joins, 33 prescreen passes.
+* All 33 passing properties were retained ahead of the 250-row display limit.
+* Production 1800 x 1800 municipal imagery succeeded at Maryview Medical Center and retained clear
+  rooftop and mechanical-yard detail. Churchland and mixed urban samples showed consistent resolution.

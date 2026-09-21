@@ -2,6 +2,15 @@ HVAC Local Detector v0.0.12 — Model Card
 =========================================
 Intended use: commercial-HVAC sales prospecting triage from high-resolution overhead aerial imagery.
 
+v0.11.15 territory note: Portsmouth is routed through official city address, assessor-enriched parcel,
+and building-footprint services plus the city's 2022 high-resolution aerial tiles. A bounded, cached
+tile mosaic preserves the detector's 1800 x 1800 frame contract without changing model inference or
+primary thresholds. Production imagery at Maryview retained clear rooftop and mechanical-yard detail.
+The existing context-only review for >=100,000-ft2 medical campuses is extended to Portsmouth without
+asserting detected equipment. Suffolk is now hidden after its blind field test showed unacceptable
+high-value false negatives; Chesapeake and Newport News remain hidden for the same imagery-reliability
+reason. Hampton, Norfolk, and Virginia Beach detector behavior remains preserved.
+
 v0.11.14 territory note: Suffolk is routed through official city address, parcel, building-footprint,
 and parcel land-book services plus statewide VGIN VBMP imagery. Production-size frames at Sentara
 Obici Hospital, King's Fork High School, QVC, and the Harbour View medical campus retained usable
